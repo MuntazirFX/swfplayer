@@ -45,6 +45,32 @@ struct GameView: UIViewRepresentable {
     func updateUIView(_ wv: WKWebView, context: Context) {}
 }
 
+struct DocPicker: UIViewControllerRepresentable {
+    let onPick: ([URL]) -> Void
+    let onCancel: () -> Void
+    func makeCoordinator() -> Coord { Coord(onPick: onPick, onCancel: onCancel) }
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let p = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        p.allowsMultipleSelection = true
+        p.delegate = context.coordinator
+        return p
+    }
+    func updateUIViewController(_ vc: UIDocumentPickerViewController, context: Context) {}
+    final class Coord: NSObject, UIDocumentPickerDelegate {
+        let onPick: ([URL]) -> Void
+        let onCancel: () -> Void
+        init(onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick; self.onCancel = onCancel
+        }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            onPick(urls)
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
+    }
+}
+
 extension URL: Identifiable { public var id: String { absoluteString } }
 
 final class Library: ObservableObject {
@@ -128,13 +154,13 @@ struct ContentView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .fileImporter(isPresented: $picking,
-                      allowedContentTypes: [.item],
-                      allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls): info = lib.add(urls)
-            case .failure(let e): info = "Picker error: \(e.localizedDescription)"
-            }
+        .sheet(isPresented: $picking) {
+            DocPicker(onPick: { urls in
+                picking = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    info = lib.add(urls)
+                }
+            }, onCancel: { picking = false })
         }
         .alert("Import", isPresented: Binding(get: { info != nil },
                                               set: { if !$0 { info = nil } })) {
