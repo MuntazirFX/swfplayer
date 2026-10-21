@@ -61,15 +61,24 @@ final class Library: ObservableObject {
         files = all.filter { $0.pathExtension.lowercased() == "swf" }
             .sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
     }
-    func add(_ urls: [URL]) {
+    func add(_ urls: [URL]) -> String {
+        var msgs: [String] = []
         for u in urls {
             let ok = u.startAccessingSecurityScopedResource()
             defer { if ok { u.stopAccessingSecurityScopedResource() } }
-            let dest = dir.appendingPathComponent(u.lastPathComponent)
-            try? FileManager.default.removeItem(at: dest)
-            try? FileManager.default.copyItem(at: u, to: dest)
+            var name = u.lastPathComponent
+            if !name.lowercased().hasSuffix(".swf") { name += ".swf" }
+            let dest = dir.appendingPathComponent(name)
+            do {
+                let d = try Data(contentsOf: u)
+                try d.write(to: dest, options: .atomic)
+                msgs.append("OK: \(name) (\(d.count) bytes)")
+            } catch {
+                msgs.append("Error: \(name): \(error.localizedDescription)")
+            }
         }
         refresh()
+        return msgs.joined(separator: "\n")
     }
     func remove(_ offsets: IndexSet, from list: [URL]) {
         for i in offsets { try? FileManager.default.removeItem(at: list[i]) }
@@ -82,6 +91,7 @@ struct ContentView: View {
     @State private var picking = false
     @State private var query = ""
     @State private var playing: URL?
+    @State private var info: String?
 
     var filtered: [URL] {
         query.isEmpty ? lib.files : lib.files.filter {
@@ -119,10 +129,17 @@ struct ContentView: View {
         }
         .navigationViewStyle(.stack)
         .fileImporter(isPresented: $picking,
-                      allowedContentTypes: [UTType(filenameExtension: "swf") ?? .data, .data],
+                      allowedContentTypes: [.item],
                       allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { lib.add(urls) }
+            switch result {
+            case .success(let urls): info = lib.add(urls)
+            case .failure(let e): info = "Picker error: \(e.localizedDescription)"
+            }
         }
+        .alert("Import", isPresented: Binding(get: { info != nil },
+                                              set: { if !$0 { info = nil } })) {
+            Button("OK") {}
+        } message: { Text(info ?? "") }
         .fullScreenCover(item: $playing) { _ in
             ZStack(alignment: .topTrailing) {
                 Color.black.ignoresSafeArea()
