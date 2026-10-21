@@ -30,6 +30,96 @@ final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
+// MARK: - SWF metadata (auto title, size, version)
+struct SWFInfo: Codable {
+    var title: String
+    var width: Int
+    var height: Int
+    var version: Int
+}
+
+enum SWFMeta {
+    private static let small: Set<String> = ["of", "the", "and", "a", "an", "in", "on", "vs", "to", "for"]
+
+    static func cleanName(_ raw: String) -> String {
+        var s = raw
+        s = s.replacingOccurrences(of: "\\(\\d+\\)", with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: "[_\\-+]+", with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        var words: [String] = []
+        for (i, w) in s.split(separator: " ").enumerated() {
+            let word = String(w)
+            if word != word.lowercased() { words.append(word); continue }
+            if i > 0 && small.contains(word) { words.append(word); continue }
+            words.append(word.prefix(1).uppercased() + word.dropFirst())
+        }
+        let out = words.joined(separator: " ")
+        return out.isEmpty ? raw : out
+    }
+
+    static func readInfo(_ url: URL) -> SWFInfo {
+        let fallback = cleanName(url.deletingPathExtension().lastPathComponent)
+        guard let data = try? Data(contentsOf: url), data.count > 16 else {
+            return SWFInfo(title: fallback, width: 0, height: 0, version: 0)
+        }
+        let version = Int(data[3])
+        var bodyData = Data()
+        if data[0] == 0x46 {
+            bodyData = data.subdata(in: 8..<data.count)
+        } else if data[0] == 0x43 {
+            let comp = data.subdata(in: 10..<(data.count - 4))
+            if let d = try? (comp as NSData).decompressed(using: .zlib) { bodyData = d as Data }
+        }
+        let body = bodyData
+
+        var w = 0, h = 0
+        if body.count > 20 {
+            let n = Int(body[0] >> 3)
+            if n > 0 && n < 31 && 5 + n * 4 <= body.count * 8 {
+                func bitsAt(_ pos: Int, _ cnt: Int) -> Int {
+                    var v = 0
+                    for i in 0..<cnt {
+                        let p = pos + i
+                        let byte = Int(body[p / 8])
+                        v = (v << 1) | ((byte >> (7 - p % 8)) & 1)
+                    }
+                    return v
+                }
+                let xmin = bitsAt(5, n), xmax = bitsAt(5 + n, n)
+                let ymin = bitsAt(5 + 2 * n, n), ymax = bitsAt(5 + 3 * n, n)
+                w = (xmax - xmin) / 20
+                h = (ymax - ymin) / 20
+            }
+        }
+
+        var title = fallback
+        if let t = xmpTitle(in: body) { title = t }
+        return SWFInfo(title: title, width: w, height: h, version: version)
+    }
+
+    private static func xmpTitle(in body: Data) -> String? {
+        guard let r = body.range(of: Data("<dc:title>".utf8)) else { return nil }
+        let end = min(body.count, r.upperBound + 800)
+        let chunk = String(decoding: body.subdata(in: r.lowerBound..<end), as: UTF8.self)
+        let patterns = ["<dc:title>.*?<rdf:li[^>]*>(.*?)</rdf:li>", "<dc:title>(.*?)</dc:title>"]
+        let bad: Set<String> = ["", "untitled", "untitled-1", "untitled document", "unknown", "adobe flash", "flash"]
+        for p in patterns {
+            guard let re = try? NSRegularExpression(pattern: p, options: [.dotMatchesLineSeparators]),
+                  let m = re.firstMatch(in: chunk, range: NSRange(chunk.startIndex..., in: chunk)),
+                  m.numberOfRanges > 1,
+                  let rr = Range(m.range(at: 1), in: chunk) else { continue }
+            var t = String(chunk[rr]).trimmingCharacters(in: .whitespacesAndNewlines)
+            t = t.replacingOccurrences(of: "&amp;", with: "&")
+                .replacingOccurrences(of: "&apos;", with: "'")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+            if !t.contains("<") && !bad.contains(t.lowercased()) && t.count < 80 { return t }
+        }
+        return nil
+    }
+}
+
 // MARK: - Web view + key injection
 final class WebHolder {
     weak var web: WKWebView?
@@ -206,6 +296,11 @@ extension URL { var gameName: String { deletingPathExtension().lastPathComponent
 // MARK: - Library
 final class Library: ObservableObject {
     @Published var files: [URL] = []
+    @Published var info: [String: SWFInfo] = {
+        if let d = UserDefaults.standard.data(forKey: "swfinfo"),
+           let m = try? JSONDecoder().decode([String: SWFInfo].self, from: d) { return m }
+        return [:]
+    }()
     @Published var plays: [String: Int] = UserDefaults.standard.dictionary(forKey: "plays") as? [String: Int] ?? [:]
     @Published var last: [String: Double] = UserDefaults.standard.dictionary(forKey: "last") as? [String: Double] ?? [:]
 
@@ -220,7 +315,36 @@ final class Library: ObservableObject {
     func refresh() {
         let all = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         files = all.filter { $0.pathExtension.lowercased() == "swf" }
+        loadMissingInfo()
     }
+
+    private func loadMissingInfo() {
+        let missing = files.filter { info[$0.lastPathComponent] == nil }
+        if missing.isEmpty { return }
+        DispatchQueue.global(qos: .utility).async {
+            var found: [String: SWFInfo] = [:]
+            for u in missing { found[u.lastPathComponent] = SWFMeta.readInfo(u) }
+            DispatchQueue.main.async {
+                for (k, v) in found { self.info[k] = v }
+                if let data = try? JSONEncoder().encode(self.info) {
+                    UserDefaults.standard.set(data, forKey: "swfinfo")
+                }
+            }
+        }
+    }
+
+    func title(_ url: URL) -> String {
+        info[url.lastPathComponent]?.title ?? SWFMeta.cleanName(url.gameName)
+    }
+
+    func subtitle(_ url: URL) -> String {
+        var parts: [String] = []
+        if let i = info[url.lastPathComponent], i.width > 0 { parts.append("\(i.width)×\(i.height)") }
+        let sz = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        if sz > 0 { parts.append(ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .file)) }
+        return parts.joined(separator: " · ")
+    }
+
     func add(_ urls: [URL]) -> String {
         var msgs: [String] = []
         for u in urls {
@@ -232,7 +356,8 @@ final class Library: ObservableObject {
             do {
                 let d = try Data(contentsOf: u)
                 try d.write(to: dest, options: .atomic)
-                msgs.append("OK: \(name)")
+                info[name] = nil
+                msgs.append("OK: \(SWFMeta.cleanName((name as NSString).deletingPathExtension))")
             } catch {
                 msgs.append("Error: \(name): \(error.localizedDescription)")
             }
@@ -242,6 +367,7 @@ final class Library: ObservableObject {
     }
     func remove(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
+        info[url.lastPathComponent] = nil
         refresh()
     }
     func recordPlay(_ url: URL) {
@@ -265,16 +391,16 @@ struct ContentView: View {
 
     private var sorted: [URL] {
         var list = lib.files
-        if !query.isEmpty { list = list.filter { $0.gameName.localizedCaseInsensitiveContains(query) } }
+        if !query.isEmpty { list = list.filter { lib.title($0).localizedCaseInsensitiveContains(query) } }
         switch sortMode {
-        case 1: return list.sorted { $0.gameName.lowercased() < $1.gameName.lowercased() }
+        case 1: return list.sorted { lib.title($0).lowercased() < lib.title($1).lowercased() }
         case 2: return list.sorted { (lib.plays[$0.gameName] ?? 0) > (lib.plays[$1.gameName] ?? 0) }
         default: return list.sorted { (lib.last[$0.gameName] ?? 0) > (lib.last[$1.gameName] ?? 0) }
         }
     }
-    private var lastPlayed: URL? {
-        lib.files.filter { lib.last[$0.gameName] != nil }
-            .max { (lib.last[$0.gameName] ?? 0) < (lib.last[$1.gameName] ?? 0) }
+    private var countText: String {
+        let n = lib.files.count
+        return n == 1 ? "1 game" : "\(n) games"
     }
     private func play(_ url: URL) {
         GameStore.data = try? Data(contentsOf: url)
@@ -304,25 +430,8 @@ struct ContentView: View {
                     }
                     .padding(12).background(Color.white.opacity(0.08)).cornerRadius(14)
 
-                    if let lp = lastPlayed, query.isEmpty {
-                        Button { play(lp) } label: {
-                            HStack {
-                                Image(systemName: "play.circle.fill").font(.title)
-                                VStack(alignment: .leading) {
-                                    Text("Continue").font(.caption).opacity(0.8)
-                                    Text(lp.gameName).font(.headline).lineLimit(1)
-                                }
-                                Spacer()
-                            }
-                            .foregroundColor(.white).padding(14)
-                            .background(LinearGradient(colors: [.orange, Color(red: 0.9, green: 0.3, blue: 0.2)],
-                                                       startPoint: .leading, endPoint: .trailing))
-                            .cornerRadius(16)
-                        }
-                    }
-
                     HStack {
-                        Text("\(lib.files.count) games").font(.subheadline).foregroundColor(.gray)
+                        Text(countText).font(.subheadline).foregroundColor(.gray)
                         Spacer()
                         Menu {
                             Button("Recently Played") { sortMode = 0 }
@@ -349,22 +458,22 @@ struct ContentView: View {
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                             ForEach(sorted) { url in
-                                let n = url.gameName
+                                let t = lib.title(url)
                                 Button { play(url) } label: {
                                     VStack(alignment: .leading, spacing: 8) {
                                         ZStack {
                                             RoundedRectangle(cornerRadius: 12)
-                                                .fill(LinearGradient(colors: [color(n), color(n).opacity(0.45)],
+                                                .fill(LinearGradient(colors: [color(t), color(t).opacity(0.45)],
                                                                      startPoint: .topLeading, endPoint: .bottomTrailing))
-                                            Text(String(n.prefix(1)).uppercased())
+                                            Text(String(t.prefix(1)).uppercased())
                                                 .font(.system(size: 44, weight: .heavy)).foregroundColor(.white.opacity(0.9))
                                         }
                                         .frame(height: 90)
-                                        Text(n.replacingOccurrences(of: "_", with: " "))
+                                        Text(t)
                                             .font(.subheadline.bold()).foregroundColor(.white).lineLimit(2)
                                             .frame(maxWidth: .infinity, alignment: .leading)
-                                        Label("\(lib.plays[n] ?? 0) plays", systemImage: "play.fill")
-                                            .font(.caption).foregroundColor(.orange)
+                                        Text(lib.subtitle(url))
+                                            .font(.caption).foregroundColor(.gray).lineLimit(1)
                                     }
                                     .padding(10).background(Color.white.opacity(0.08)).cornerRadius(16)
                                 }
@@ -409,7 +518,7 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { deleteTarget = nil }
         }
         .fullScreenCover(item: $playing) { url in
-            PlayerScreen(name: url.gameName) { playing = nil }
+            PlayerScreen(name: lib.title(url)) { playing = nil }
         }
     }
 }
