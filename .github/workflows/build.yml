@@ -1,0 +1,36 @@
+name: Build unsigned IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Download Ruffle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dl www/ruffle
+          gh release download --repo ruffle-rs/ruffle --pattern '*web-selfhosted.zip' --dir dl
+          unzip -o dl/*.zip -d www/ruffle
+          ls www/ruffle
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build (no signing)
+        run: |
+          xcodebuild -project SWFPlayer.xcodeproj -scheme SWFPlayer \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Make IPA
+        run: |
+          mkdir Payload
+          cp -r build/Build/Products/Release-iphoneos/SWFPlayer.app Payload/
+          zip -qr SWFPlayer.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SWFPlayer-ipa
+          path: SWFPlayer.ipa
