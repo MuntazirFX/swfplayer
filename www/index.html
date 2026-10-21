@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>html,body{margin:0;height:100%;background:#000}</style>
+<script src="ruffle/ruffle.js"></script>
+</head><body>
+<script>
+window.addEventListener("load", () => {
+  const ruffle = window.RufflePlayer.newest();
+  const p = ruffle.createPlayer();
+  p.style.width = "100vw"; p.style.height = "100vh";
+  document.body.appendChild(p);
+  p.load("game.swf");
+});
+</script>
+</body></html>
