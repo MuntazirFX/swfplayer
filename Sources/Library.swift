@@ -92,9 +92,11 @@ final class Library: ObservableObject {
         return parts.joined(separator: " · ")
     }
 
-    func isLandscape(_ url: URL) -> Bool {
-        if let i = info[url.lastPathComponent], i.width > 0 { return i.width > i.height }
-        return false
+    func gameSize(_ url: URL) -> CGSize {
+        if let i = info[url.lastPathComponent], i.width > 0, i.height > 0 {
+            return CGSize(width: i.width, height: i.height)
+        }
+        return .zero
     }
 
     func rename(_ url: URL, to name: String) {

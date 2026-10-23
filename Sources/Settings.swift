@@ -3,7 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var lib: Library
-    @AppStorage("scaleMode") private var scaleMode = "showAll"
+    @AppStorage("scaleMode") private var scaleMode = "auto"
     @AppStorage("quality") private var quality = "high"
     @AppStorage("autoLandscape") private var autoLandscape = true
     @AppStorage("controlsOn") private var controlsOn = true
@@ -22,10 +22,10 @@ struct SettingsView: View {
             Form {
                 Section(header: Text("Display")) {
                     Picker("Screen mode", selection: $scaleMode) {
-                        Text("Fit (poora dikhao)").tag("showAll")
-                        Text("Fill (crop)").tag("noBorder")
+                        Text("Auto (recommended)").tag("auto")
+                        Text("Fit").tag("showAll")
+                        Text("Fill (crop edges)").tag("noBorder")
                         Text("Stretch").tag("exactFit")
-                        Text("Original size").tag("noScale")
                     }
                     Picker("Quality", selection: $quality) {
                         Text("Low").tag("low")
@@ -33,11 +33,11 @@ struct SettingsView: View {
                         Text("High").tag("high")
                         Text("Best").tag("best")
                     }
-                    Toggle("Landscape games auto-rotate", isOn: $autoLandscape)
+                    Toggle("Auto-rotate to match game", isOn: $autoLandscape)
                 }
                 Section(header: Text("Controls")) {
                     Toggle("On-screen controls", isOn: $controlsOn)
-                    Toggle("WASD (arrows ki jagah)", isOn: $wasd)
+                    Toggle("WASD instead of arrows", isOn: $wasd)
                     Toggle("Extra buttons (C, Shift, Esc, R)", isOn: $extraKeys)
                     Toggle("Haptic feedback", isOn: $haptics)
                     VStack(alignment: .leading) {
@@ -55,9 +55,9 @@ struct SettingsView: View {
                         Spacer()
                         Text("\(lib.files.count) · \(lib.storageText)").foregroundColor(.gray)
                     }
-                    Button("Thumbnails saaf karo") { lib.clearThumbs() }
+                    Button("Clear thumbnails") { lib.clearThumbs() }
                 }
-                Section(header: Text("About"), footer: Text("Files app mein SWF Player > Games folder mein bhi SWF daal sakte ho.")) {
+                Section(header: Text("About"), footer: Text("You can also drop SWF files into SWF Player › Games in the Files app.")) {
                     HStack {
                         Text("Version")
                         Spacer()
@@ -89,8 +89,8 @@ struct RenameSheet: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(footer: Text("Khali chhodoge toh auto naam wapas aa jayega.")) {
-                    TextField("Game ka naam", text: $text).disableAutocorrection(true)
+                Section(footer: Text("Leave empty to restore the automatic name.")) {
+                    TextField("Game name", text: $text).disableAutocorrection(true)
                 }
             }
             .navigationTitle("Rename")

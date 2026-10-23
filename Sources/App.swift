@@ -102,7 +102,7 @@ struct ContentView: View {
 
                     HStack {
                         Image(systemName: "magnifyingglass").foregroundColor(.gray)
-                        TextField("Game search karo", text: $query)
+                        TextField("Search games", text: $query)
                             .foregroundColor(.white).disableAutocorrection(true)
                     }
                     .padding(12).background(Color.white.opacity(0.08)).cornerRadius(14)
@@ -115,7 +115,7 @@ struct ContentView: View {
                             Button("Name") { sortMode = 1 }
                             Button("Most Played") { sortMode = 2 }
                             Button { favOnly.toggle() } label: {
-                                Label("Sirf Favorites", systemImage: favOnly ? "checkmark" : "heart")
+                                Label("Favorites only", systemImage: favOnly ? "checkmark" : "heart")
                             }
                         } label: {
                             HStack(spacing: 4) {
@@ -131,12 +131,12 @@ struct ContentView: View {
                     if lib.files.isEmpty {
                         VStack(spacing: 12) {
                             Image(systemName: "gamecontroller").font(.system(size: 54)).foregroundColor(.gray)
-                            Text("Koi game nahi hai").foregroundColor(.white).font(.headline)
-                            Text("Neeche + dabake SWF files add karo").foregroundColor(.gray).font(.subheadline)
+                            Text("No games yet").foregroundColor(.white).font(.headline)
+                            Text("Tap + to add SWF files").foregroundColor(.gray).font(.subheadline)
                         }
                         .frame(maxWidth: .infinity).padding(.top, 80)
                     } else if sorted.isEmpty {
-                        Text("Kuch nahi mila")
+                        Text("No results")
                             .foregroundColor(.gray).font(.subheadline)
                             .frame(maxWidth: .infinity).padding(.top, 60)
                     } else {
@@ -147,7 +147,7 @@ struct ContentView: View {
                                     .contextMenu {
                                         Button { play(url) } label: { Label("Play", systemImage: "play.fill") }
                                         Button { lib.toggleFav(url) } label: {
-                                            Label(lib.isFav(url) ? "Favorite hatao" : "Favorite banao",
+                                            Label(lib.isFav(url) ? "Remove from Favorites" : "Add to Favorites",
                                                   systemImage: lib.isFav(url) ? "heart.slash" : "heart")
                                         }
                                         Button { sheet = .rename(url) } label: { Label("Rename", systemImage: "pencil") }
@@ -188,7 +188,7 @@ struct ContentView: View {
         .alert("Import", isPresented: Binding(get: { info != nil }, set: { if !$0 { info = nil } })) {
             Button("OK") {}
         } message: { Text(info ?? "") }
-        .confirmationDialog("Ye game delete karna hai?",
+        .confirmationDialog("Delete this game?",
                             isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
                             titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -199,7 +199,7 @@ struct ContentView: View {
         }
         .fullScreenCover(item: $playing) { url in
             PlayerScreen(name: lib.title(url),
-                         landscapeHint: lib.isLandscape(url),
+                         gameSize: lib.gameSize(url),
                          needThumb: !lib.hasThumb(url),
                          onThumb: { img in lib.saveThumb(img, for: url) },
                          onClose: { playing = nil })
