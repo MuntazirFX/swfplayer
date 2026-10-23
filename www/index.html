@@ -1,16 +1,39 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<style>html,body{margin:0;height:100%;background:#000}</style>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}</style>
 <script src="ruffle/ruffle.js"></script>
 </head><body>
 <script>
 window.addEventListener("load", () => {
+  const q = new URLSearchParams(location.search);
   const ruffle = window.RufflePlayer.newest();
   const p = ruffle.createPlayer();
   p.style.width = "100vw"; p.style.height = "100vh";
   document.body.appendChild(p);
-  p.load("game.swf");
+
+  let sent = false;
+  const ready = () => {
+    if (sent) return; sent = true;
+    try { window.webkit.messageHandlers.pf.postMessage("ready"); } catch (e) {}
+  };
+  p.addEventListener("loadedmetadata", ready);
+  setTimeout(ready, 4000);
+
+  window.pf = {
+    pause: () => { try { p.pause(); } catch (e) {} },
+    play:  () => { try { p.play(); } catch (e) {} },
+    mute:  (m) => { try { p.volume = m ? 0 : 1; } catch (e) {} }
+  };
+
+  p.load({
+    url: "game.swf",
+    scale: q.get("scale") || "showAll",
+    forceScale: true,
+    quality: q.get("quality") || "high",
+    autoplay: "on",
+    splashScreen: false
+  });
 });
 </script>
 </body></html>
