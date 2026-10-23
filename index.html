@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+#probe{position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+ruffle-player{position:fixed;display:block}
+</style>
+<script src="ruffle/ruffle.js"></script>
+</head><body><div id="probe"></div>
+<script>
+window.addEventListener("load", () => {
+  const q = new URLSearchParams(location.search);
+  let mode = q.get("scale") || "auto";   // auto | showAll (fit) | noBorder (fill) | exactFit (stretch)
+  let sw = parseInt(q.get("w")) || 0, sh = parseInt(q.get("h")) || 0;
+  const known = sw > 0 && sh > 0;
+
+  const probe = document.getElementById("probe");
+  const ruffle = window.RufflePlayer.newest();
+  const p = ruffle.createPlayer();
+  document.body.appendChild(p);
+
+  function insets() {
+    const c = getComputedStyle(probe);
+    return { t: parseFloat(c.paddingTop) || 0, r: parseFloat(c.paddingRight) || 0,
+             b: parseFloat(c.paddingBottom) || 0, l: parseFloat(c.paddingLeft) || 0 };
+  }
+  function place(L, T, W, H) {
+    const s = p.style;
+    s.left = L + "px"; s.top = T + "px"; s.width = W + "px"; s.height = H + "px";
+  }
+  function layout() {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (!known) { place(0, 0, vw, vh); return; }   // Ruffle letterboxes by itself
+    const ar = sw / sh;
+    const contain = (aw, ah) => { let w = aw, h = w / ar; if (h > ah) { h = ah; w = h * ar; } return [w, h]; };
+    const cover   = (aw, ah) => { let w = aw, h = w / ar; if (h < ah) { h = ah; w = h * ar; } return [w, h]; };
+    const near = Math.abs(ar / (vw / vh) - 1) <= 0.06;   // screen shape ~ game shape
+    let L = 0, T = 0, W = vw, H = vh;
+    if (mode === "exactFit" || (mode === "auto" && near)) {
+      // use the whole screen
+    } else if (mode === "noBorder") {
+      [W, H] = cover(vw, vh); L = (vw - W) / 2; T = (vh - H) / 2;
+    } else {
+      // fit inside the safe area (keeps the game clear of notch / Dynamic Island)
+      const i = insets();
+      const aw = vw - i.l - i.r, ah = vh - i.t - i.b;
+      [W, H] = contain(aw, ah);
+      L = i.l + (aw - W) / 2; T = i.t + (ah - H) / 2;
+    }
+    place(L, T, W, H);
+  }
+  layout();
+  window.addEventListener("resize", layout);
+  window.addEventListener("orientationchange", () => setTimeout(layout, 50));
+
+  let sent = false;
+  const ready = () => {
+    if (sent) return; sent = true;
+    try { window.webkit.messageHandlers.pf.postMessage("ready"); } catch (e) {}
+  };
+  p.addEventListener("loadedmetadata", ready);
+  setTimeout(ready, 4000);
+
+  window.pf = {
+    pause:   () => { try { p.pause(); } catch (e) {} },
+    play:    () => { try { p.play(); } catch (e) {} },
+    mute:    (m) => { try { p.volume = m ? 0 : 1; } catch (e) {} },
+    setMode: (m) => { mode = m; layout(); }
+  };
+
+  p.load({
+    url: "game.swf",
+    scale: known ? "exactFit" : "showAll",
+    forceScale: true,
+    quality: q.get("quality") || "high",
+    autoplay: "on",
+    splashScreen: false
+  });
+});
+</script>
+</body></html>
