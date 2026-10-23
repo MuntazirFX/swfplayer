@@ -40,6 +40,12 @@ final class Library: ObservableObject {
     @Published var favs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "favs") ?? [])
     @Published var custom: [String: String] = UserDefaults.standard.dictionary(forKey: "customTitles") as? [String: String] ?? [:]
     @Published var thumbRev = 0
+    @Published var onlineInfo: [String: GameOnlineInfo] = {
+        if let data = UserDefaults.standard.data(forKey: "onlineGameInfo"),
+           let decoded = try? JSONDecoder().decode([String: GameOnlineInfo].self, from: data) { return decoded }
+        return [:]
+    }()
+    @Published var aiMatching: Set<String> = []
 
     let dir: URL = {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -81,7 +87,7 @@ final class Library: ObservableObject {
     // MARK: titles / info
     func title(_ url: URL) -> String {
         if let c = custom[url.gameName], !c.isEmpty { return c }
-        return info[url.lastPathComponent]?.title ?? SWFMeta.cleanName(url.gameName)
+        return onlineInfo[url.lastPathComponent]?.title ?? info[url.lastPathComponent]?.title ?? SWFMeta.cleanName(url.gameName)
     }
 
     func subtitle(_ url: URL) -> String {
@@ -103,6 +109,37 @@ final class Library: ObservableObject {
         let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
         custom[url.gameName] = t.isEmpty ? nil : t
         UserDefaults.standard.set(custom, forKey: "customTitles")
+    }
+
+    // MARK: online AI game metadata
+    func matchOnline(_ url: URL) async -> String {
+        let key = url.lastPathComponent
+        if aiMatching.contains(key) { return "AI is already searching for this game." }
+        aiMatching.insert(key)
+        defer { aiMatching.remove(key) }
+
+        do {
+            let lookupName = custom[url.gameName] ?? info[key]?.title ?? SWFMeta.cleanName(url.gameName)
+            let result = try await GameAIService.findGame(named: lookupName)
+            onlineInfo[key] = result
+            if let data = try? JSONEncoder().encode(onlineInfo) {
+                UserDefaults.standard.set(data, forKey: "onlineGameInfo")
+            }
+
+            if let raw = result.imageURL, let imageURL = URL(string: raw),
+               let (imageData, response) = try? await URLSession.shared.data(from: imageURL),
+               (response as? HTTPURLResponse)?.statusCode == 200,
+               let image = UIImage(data: imageData) {
+                saveThumb(image, for: url)
+            }
+            return "AI matched: \(result.title)\n\n\(result.description)\n\n\(result.extract)\n\nSource: \(result.sourceURL)"
+        } catch {
+            return "AI could not find a reliable match for \(SWFMeta.cleanName(url.gameName)).\n\(error.localizedDescription)"
+        }
+    }
+
+    func onlineDetails(_ url: URL) -> GameOnlineInfo? {
+        onlineInfo[url.lastPathComponent]
     }
 
     // MARK: favorites

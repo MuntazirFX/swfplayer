@@ -146,6 +146,20 @@ struct ContentView: View {
                                     .buttonStyle(.plain)
                                     .contextMenu {
                                         Button { play(url) } label: { Label("Play", systemImage: "play.fill") }
+                                        Button {
+                                            Task { info = await lib.matchOnline(url) }
+                                        } label: {
+                                            Label("AI Match Game Info", systemImage: "sparkles")
+                                        }
+                                        Button {
+                                            if let game = lib.onlineDetails(url) {
+                                                info = "\(game.title)\n\n\(game.description)\n\n\(game.extract)\n\nSource: \(game.sourceURL)"
+                                            } else {
+                                                Task { info = await lib.matchOnline(url) }
+                                            }
+                                        } label: {
+                                            Label("Full Game Information", systemImage: "info.circle")
+                                        }
                                         Button { lib.toggleFav(url) } label: {
                                             Label(lib.isFav(url) ? "Remove from Favorites" : "Add to Favorites",
                                                   systemImage: lib.isFav(url) ? "heart.slash" : "heart")
@@ -177,7 +191,16 @@ struct ContentView: View {
             case .picker:
                 DocPicker(onPick: { urls in
                     sheet = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { info = lib.add(urls) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        info = lib.add(urls)
+                        let importedNames = Set(urls.map { $0.lastPathComponent })
+                        let importedGames = lib.files.filter { importedNames.contains($0.lastPathComponent) }
+                        Task {
+                            for game in importedGames {
+                                _ = await lib.matchOnline(game)
+                            }
+                        }
+                    }
                 }, onCancel: { sheet = nil })
             case .settings:
                 SettingsView(lib: lib)
