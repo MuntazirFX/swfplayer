@@ -4,11 +4,11 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var lib: Library
     @AppStorage("scaleMode") private var scaleMode = "auto"
-    @AppStorage("quality") private var quality = "high"
+    @AppStorage("quality") private var quality = "low"
+    @AppStorage("resolution") private var resolution = "2"
     @AppStorage("autoLandscape") private var autoLandscape = true
     @AppStorage("controlsOn") private var controlsOn = true
     @AppStorage("wasd") private var wasd = false
-    @AppStorage("extraKeys") private var extraKeys = false
     @AppStorage("haptics") private var haptics = true
     @AppStorage("ctrlSize") private var ctrlSize = 58.0
     @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
@@ -37,6 +37,12 @@ struct SettingsView: View {
                         Text("High").tag("high")
                         Text("Best").tag("best")
                     }
+                    Picker("Render resolution", selection: $resolution) {
+                        Text("Native (sharpest)").tag("0")
+                        Text("2x").tag("2")
+                        Text("1.5x").tag("1.5")
+                        Text("1x (fastest)").tag("1")
+                    }
                     Toggle("Auto-rotate to match game", isOn: $autoLandscape)
                 }
                 Section(header: Text("Performance"),
@@ -58,7 +64,6 @@ struct SettingsView: View {
                 Section(header: Text("Controls")) {
                     Toggle("On-screen controls", isOn: $controlsOn)
                     Toggle("WASD instead of arrows", isOn: $wasd)
-                    Toggle("Extra buttons (C, Shift, Esc, R)", isOn: $extraKeys)
                     Toggle("Haptic feedback", isOn: $haptics)
                     VStack(alignment: .leading) {
                         Text("Button size: \(Int(ctrlSize))")

@@ -59,6 +59,7 @@ struct GameConfig {
     var showFps: Bool
     var showCursor: Bool
     var trackpad: Bool
+    var dpr: Double
 }
 
 // MARK: - Web view holder + JS helpers
@@ -93,7 +94,8 @@ final class WebHolder {
             URLQueryItem(name: "fps", value: String(c.fps)),
             URLQueryItem(name: "showfps", value: c.showFps ? "1" : "0"),
             URLQueryItem(name: "cursor", value: c.showCursor ? "1" : "0"),
-            URLQueryItem(name: "trackpad", value: c.trackpad ? "1" : "0")
+            URLQueryItem(name: "trackpad", value: c.trackpad ? "1" : "0"),
+            URLQueryItem(name: "dpr", value: String(c.dpr))
         ]
         guard let u = comps.url else { return }
         web?.load(URLRequest(url: u))
@@ -176,13 +178,14 @@ struct PlayerScreen: View {
     @AppStorage("dir8") private var dir8 = true
     @AppStorage("wasd") private var wasd = false
     @AppStorage("scaleMode") private var scaleMode = "auto"
-    @AppStorage("quality") private var quality = "high"
+    @AppStorage("quality") private var quality = "low"
+    @AppStorage("resolution") private var resolution = "2"
     @AppStorage("engine") private var engine = "standard"
     @AppStorage("fpsCap") private var fpsCap = "0"
     @AppStorage("showFps") private var showFps = false
     @AppStorage("ctrlSize") private var ctrlSize = 58.0
     @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
-    @AppStorage("extraKeys") private var extraKeys = false
+    @AppStorage("moveType") private var moveType = "dpad"
     @AppStorage("autoLandscape") private var autoLandscape = true
     @AppStorage("cursorMode") private var cursorMode = false
     @AppStorage("cursorSpeed") private var cursorSpeed = 9.0
@@ -203,6 +206,8 @@ struct PlayerScreen: View {
     @State private var keyboardOn = false
     @State private var confirmExit = false
     @State private var thumbDone = false
+    @State private var slots: [SlotButtonModel] = []
+    @State private var editing = false
 
     private let penColors: [Color] = [.red, .yellow, .green, .white, .cyan]
     private let autosave = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -224,7 +229,8 @@ struct PlayerScreen: View {
     private func config() -> GameConfig {
         GameConfig(gid: gameKey, scale: scaleMode, quality: quality, size: gameSize,
                    engine: engine, fps: Int(fpsCap) ?? 0, showFps: showFps,
-                   showCursor: cursorVisible, trackpad: cursorMode)
+                   showCursor: cursorVisible, trackpad: cursorMode,
+                   dpr: engine == "perf" ? 1.0 : (Double(resolution) ?? 0))
     }
 
     private func syncJS() {
@@ -321,11 +327,10 @@ struct PlayerScreen: View {
             DualSticks(holder: holder, size: ctrlSize * 2.1, mirror: mirror, wasd: wasd, dir8: dir8)
                 .opacity(ctrlOpacity)
         } else {
-            VStack {
-                Spacer()
-                KeyPads(holder: holder, layout: padLayout, wasd: wasd, size: ctrlSize,
-                        extra: extraKeys, mirror: mirror)
-                    .padding(.horizontal, 20).padding(.bottom, 24)
+            ZStack {
+                MovePad(holder: holder, moveType: moveType, wasd: wasd, dir8: dir8,
+                        size: ctrlSize, mirror: mirror)
+                SlotPads(slots: slots, size: ctrlSize, mirror: mirror, holder: holder)
             }
             .opacity(ctrlOpacity)
         }
@@ -363,7 +368,13 @@ struct PlayerScreen: View {
                 GameOptionsPanel(onClose: { showOptions = false },
                                  onReload: { reload() },
                                  onOrientation: { setOrientation($0) },
-                                 onMapping: { showOptions = false; showMapping = true })
+                                 onMapping: { showOptions = false; showMapping = true },
+                                 onEditLayout: {
+                                     showOptions = false
+                                     controlStyle = "buttons"
+                                     controlsOn = true
+                                     editing = true
+                                 })
                     .frame(width: wide ? min(400, geo.size.width * 0.55) : nil)
                     .frame(maxHeight: wide ? geo.size.height - 16 : geo.size.height * 0.7)
                     .padding(8)
@@ -384,7 +395,18 @@ struct PlayerScreen: View {
                 .allowsHitTesting(false)
             }
 
-            if controlsOn { controlsOverlay }
+            if controlsOn {
+                if editing {
+                    SlotEditor(slots: $slots, size: ctrlSize, mirror: mirror,
+                               onReset: { slots = SlotLayouts.defaults(padLayout) },
+                               onDone: {
+                                   SlotStore.save(slots, gameKey, padLayout)
+                                   editing = false
+                               })
+                } else {
+                    controlsOverlay
+                }
+            }
 
             if pencil {
                 AnnotationLayer(strokes: $strokes, color: penColors[min(penIndex, penColors.count - 1)])
@@ -400,7 +422,7 @@ struct PlayerScreen: View {
                 KeyboardCapture(holder: holder, onClose: { keyboardOn = false })
             }
 
-            sideBar
+            if !editing { sideBar }
 
             if showOptions { optionsOverlay }
         }
@@ -419,6 +441,7 @@ struct PlayerScreen: View {
             .sheet(isPresented: $showMapping) { GamepadMappingView(gameName: name) }
             .onAppear {
                 GamepadManager.shared.attach(holder: holder, gameKey: gameKey)
+                slots = SlotStore.load(gameKey, padLayout)
                 holder.onReady = {
                     loading = false
                     syncJS()
@@ -437,6 +460,7 @@ struct PlayerScreen: View {
                 }
             }
             .onChange(of: scaleMode) { m in holder.setMode(m) }
+            .onChange(of: padLayout) { l in slots = SlotStore.load(gameKey, l) }
             .onChange(of: syncKey) { _ in syncJS() }
             .onChange(of: scenePhase) { phase in
                 if phase == .active {

@@ -5,14 +5,16 @@ enum GameOptions {
     static let engines: [(String, String)] = [("standard", "Standard"), ("perf", "Performance"), ("cdn", "Original")]
     static let screenModes: [(String, String)] = [("auto", "Auto"), ("showAll", "Fit"), ("noBorder", "Fill"), ("exactFit", "Stretch")]
     static let qualities: [(String, String)] = [("low", "Low"), ("medium", "Medium"), ("high", "High"), ("best", "Best")]
+    static let resolutions: [(String, String)] = [("0", "Native"), ("2", "2x"), ("1.5", "1.5x"), ("1", "1x")]
     static let fpsCaps: [(String, String)] = [("0", "Default"), ("30", "30"), ("40", "40"), ("50", "50"), ("60", "60")]
     static let layouts: [(String, String)] = [("simple", "Simple"), ("focus", "Focus"), ("double", "Double"), ("quadra", "Quadra")]
     static let styles: [(String, String)] = [("buttons", "Buttons"), ("dual", "Dual sticks")]
     static let touchModes: [(String, String)] = [("direct", "Direct touch"), ("cursor", "Cursor")]
+    static let moves: [(String, String)] = [("dpad", "D-Pad"), ("joystick", "Joystick")]
     static let dirs: [(String, String)] = [("8", "8-Directions"), ("4", "4-Directions")]
 
-    static let resetKeys = ["scaleMode", "quality", "engine", "fpsCap", "showFps", "controlsOn", "controlStyle",
-                            "padLayout", "mirror", "dir8", "wasd", "extraKeys", "haptics", "ctrlSize",
+    static let resetKeys = ["scaleMode", "quality", "resolution", "engine", "fpsCap", "showFps", "controlsOn", "controlStyle",
+                            "padLayout", "mirror", "dir8", "wasd", "moveType", "haptics", "ctrlSize",
                             "ctrlOpacity", "autoLandscape", "cursorMode", "cursorSpeed"]
 }
 
@@ -44,9 +46,11 @@ struct GameOptionsPanel: View {
     let onReload: () -> Void
     let onOrientation: (Bool) -> Void
     let onMapping: () -> Void
+    let onEditLayout: () -> Void
 
     @AppStorage("scaleMode") private var scaleMode = "auto"
-    @AppStorage("quality") private var quality = "high"
+    @AppStorage("quality") private var quality = "low"
+    @AppStorage("resolution") private var resolution = "2"
     @AppStorage("engine") private var engine = "standard"
     @AppStorage("fpsCap") private var fpsCap = "0"
     @AppStorage("showFps") private var showFps = false
@@ -57,7 +61,7 @@ struct GameOptionsPanel: View {
     @AppStorage("mirror") private var mirror = false
     @AppStorage("dir8") private var dir8 = true
     @AppStorage("wasd") private var wasd = false
-    @AppStorage("extraKeys") private var extraKeys = false
+    @AppStorage("moveType") private var moveType = "dpad"
     @AppStorage("haptics") private var haptics = true
     @AppStorage("ctrlSize") private var ctrlSize = 58.0
     @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
@@ -66,9 +70,12 @@ struct GameOptionsPanel: View {
 
     @State private var tab = 0
     @State private var pendEngine = "standard"
-    @State private var pendQuality = "high"
+    @State private var pendQuality = "low"
+    @State private var pendRes = "2"
 
-    private var needsReload: Bool { pendEngine != engine || pendQuality != quality }
+    private var needsReload: Bool {
+        pendEngine != engine || pendQuality != quality || pendRes != resolution
+    }
 
     private func heading(_ t: String) -> some View {
         Text(t).font(.caption.weight(.bold)).foregroundColor(.orange).padding(.top, 4)
@@ -113,7 +120,9 @@ struct GameOptionsPanel: View {
                 Toggle("Show FPS counter", isOn: $showFps).tint(.orange)
                 heading("QUALITY")
                 ChipPicker(options: GameOptions.qualities, selection: $pendQuality)
-                note("Engine and quality changes need Save and Reload.")
+                heading("RENDER RESOLUTION")
+                ChipPicker(options: GameOptions.resolutions, selection: $pendRes)
+                note("Lower quality and resolution = smoother games. Engine, quality and resolution need Save and Reload.")
             }
         }
     }
@@ -137,12 +146,23 @@ struct GameOptionsPanel: View {
                 Toggle("Show controls", isOn: $controlsOn).tint(.orange)
                 ChipPicker(options: GameOptions.styles, selection: $controlStyle)
                 if controlStyle == "buttons" {
-                    note("Keyboard layout")
+                    note("Button layout (each layout is saved per game)")
                     ChipPicker(options: GameOptions.layouts, selection: $padLayout)
+                    Button(action: onEditLayout) {
+                        Label("Edit buttons: move, resize, set keys", systemImage: "square.and.pencil")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.14))
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
+                    }
                 }
                 Toggle("Left to right (swap sides)", isOn: $mirror).tint(.orange)
                 note("Direction control")
                 ChipPicker(options: GameOptions.dirs, selection: dirBinding)
+                note("Movement control")
+                ChipPicker(options: GameOptions.moves, selection: $moveType)
             }
             Group {
                 heading("TOUCH MODE")
@@ -154,7 +174,6 @@ struct GameOptionsPanel: View {
             Group {
                 heading("BUTTONS")
                 Toggle("WASD instead of arrows", isOn: $wasd).tint(.orange)
-                Toggle("Extra buttons (C, Shift, Esc, R)", isOn: $extraKeys).tint(.orange)
                 Toggle("Haptic feedback", isOn: $haptics).tint(.orange)
                 Text("Button size: \(Int(ctrlSize))").font(.subheadline)
                 Slider(value: $ctrlSize, in: 40...80, step: 2).tint(.orange)
@@ -174,10 +193,11 @@ struct GameOptionsPanel: View {
     }
 
     private func resetAll() {
-        let engineChanged = engine != "standard" || quality != "high"
+        let engineChanged = engine != "standard" || quality != "low" || resolution != "2"
         for k in GameOptions.resetKeys { UserDefaults.standard.removeObject(forKey: k) }
         pendEngine = "standard"
-        pendQuality = "high"
+        pendQuality = "low"
+        pendRes = "2"
         if engineChanged { onReload() }
     }
 
@@ -214,6 +234,7 @@ struct GameOptionsPanel: View {
                     Button {
                         engine = pendEngine
                         quality = pendQuality
+                        resolution = pendRes
                         onReload()
                         onClose()
                     } label: {
@@ -232,6 +253,7 @@ struct GameOptionsPanel: View {
         .onAppear {
             pendEngine = engine
             pendQuality = quality
+            pendRes = resolution
         }
     }
 }

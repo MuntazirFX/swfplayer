@@ -200,7 +200,7 @@ final class GamepadManager: ObservableObject {
 
     // stick-as-mouse
     private func tick() {
-        guard let h = holder, !detecting else { return }
+        guard let h = holder, !detecting, !names.isEmpty else { return }
         guard config.leftStickMouse || config.rightStickMouse else { return }
         guard let pad = GCController.controllers().first?.extendedGamepad else { return }
         var dx: Float = 0, dy: Float = 0
