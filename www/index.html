@@ -39,6 +39,16 @@ ruffle-player{position:fixed;display:block}
   let gain = 1.5;
   window.__pf.cap = parseInt(q.get("fps")) || 0;
 
+  /* Render resolution: Ruffle sizes its canvas by devicePixelRatio (3x on most iPhones).
+     Lowering it cuts the pixel count a lot and is the biggest speed-up on phones. */
+  try {
+    const want = parseFloat(q.get("dpr")) || 0;
+    const real = window.devicePixelRatio || 1;
+    if (want > 0 && want < real) {
+      Object.defineProperty(window, "devicePixelRatio", { get: () => want, configurable: true });
+    }
+  } catch (e) {}
+
   /* Restore backed-up save data (never overwrite what WebKit already has). */
   try {
     if (window.__saves) for (const k in window.__saves) {
