@@ -1,25 +1,69 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <style>
-html,body{margin:0;height:100%;background:#000;overflow:hidden}
+html,body{margin:0;height:100%;background:#000;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #probe{position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 ruffle-player{position:fixed;display:block}
+#cur{position:fixed;left:0;top:0;width:26px;height:26px;display:none;pointer-events:none;z-index:99999;
+  background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'><path d='M3 2 L3 20 L8 15.5 L11.5 23 L14.5 21.7 L11 14.5 L18 14.5 Z' fill='white' stroke='black' stroke-width='1.6' stroke-linejoin='round'/></svg>") no-repeat}
+#fps{position:fixed;right:10px;top:8px;z-index:99998;display:none;pointer-events:none;
+  font:600 13px -apple-system,Helvetica,Arial,sans-serif;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:8px}
 </style>
-<script src="ruffle/ruffle.js"></script>
-</head><body><div id="probe"></div>
 <script>
-window.addEventListener("load", () => {
+/* Frame-rate cap + counter: must run BEFORE Ruffle so its animation loop is wrapped. */
+(function () {
+  var S = window.__pf = { cap: 0, frames: 0, lastT: -1 };
+  var raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function (cb) {
+    return raf(function wrap(t) {
+      if (S.cap > 0 && t !== S.lastT && (t - S.lastT) < (1000 / S.cap - 1.5)) { raf(wrap); return; }
+      if (t !== S.lastT) { S.lastT = t; S.frames++; }
+      cb(t);
+    });
+  };
+})();
+</script>
+</head><body><div id="probe"></div><div id="cur"></div><div id="fps"></div>
+<script>
+(function () {
   const q = new URLSearchParams(location.search);
-  let mode = q.get("scale") || "auto";   // auto | showAll (fit) | noBorder (fill) | exactFit (stretch)
+  const gid = q.get("game") || "game";
+  const engine = q.get("engine") || "standard";   // standard | perf | cdn
+  let mode = q.get("scale") || "auto";            // auto | showAll (fit) | noBorder (fill) | exactFit (stretch)
   let sw = parseInt(q.get("w")) || 0, sh = parseInt(q.get("h")) || 0;
   const known = sw > 0 && sh > 0;
+  let showCursor = q.get("cursor") === "1";
+  let trackpad = q.get("trackpad") === "1";
+  let gain = 1.5;
+  window.__pf.cap = parseInt(q.get("fps")) || 0;
+
+  /* Restore backed-up save data (never overwrite what WebKit already has). */
+  try {
+    if (window.__saves) for (const k in window.__saves) {
+      if (localStorage.getItem(k) === null) localStorage.setItem(k, window.__saves[k]);
+    }
+  } catch (e) {}
 
   const probe = document.getElementById("probe");
-  const ruffle = window.RufflePlayer.newest();
-  const p = ruffle.createPlayer();
-  document.body.appendChild(p);
+  const curEl = document.getElementById("cur");
+  const fpsEl = document.getElementById("fps");
+  let player = null;
+  let cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+
+  function loadScript(src, ok, fail) {
+    const s = document.createElement("script");
+    s.src = src; s.onload = ok; s.onerror = fail;
+    document.head.appendChild(s);
+  }
+  function boot() {
+    if (engine === "cdn") {
+      loadScript("https://unpkg.com/@ruffle-rs/ruffle", start, () => loadScript("ruffle/ruffle.js", start, () => {}));
+    } else {
+      loadScript("ruffle/ruffle.js", start, () => {});
+    }
+  }
 
   function insets() {
     const c = getComputedStyle(probe);
@@ -27,23 +71,22 @@ window.addEventListener("load", () => {
              b: parseFloat(c.paddingBottom) || 0, l: parseFloat(c.paddingLeft) || 0 };
   }
   function place(L, T, W, H) {
-    const s = p.style;
+    const s = player.style;
     s.left = L + "px"; s.top = T + "px"; s.width = W + "px"; s.height = H + "px";
   }
   function layout() {
+    if (!player) return;
     const vw = window.innerWidth, vh = window.innerHeight;
-    if (!known) { place(0, 0, vw, vh); return; }   // Ruffle letterboxes by itself
+    if (!known) { place(0, 0, vw, vh); return; }
     const ar = sw / sh;
     const contain = (aw, ah) => { let w = aw, h = w / ar; if (h > ah) { h = ah; w = h * ar; } return [w, h]; };
     const cover   = (aw, ah) => { let w = aw, h = w / ar; if (h < ah) { h = ah; w = h * ar; } return [w, h]; };
-    const near = Math.abs(ar / (vw / vh) - 1) <= 0.06;   // screen shape ~ game shape
+    const near = Math.abs(ar / (vw / vh) - 1) <= 0.06;
     let L = 0, T = 0, W = vw, H = vh;
     if (mode === "exactFit" || (mode === "auto" && near)) {
-      // use the whole screen
     } else if (mode === "noBorder") {
       [W, H] = cover(vw, vh); L = (vw - W) / 2; T = (vh - H) / 2;
     } else {
-      // fit inside the safe area (keeps the game clear of notch / Dynamic Island)
       const i = insets();
       const aw = vw - i.l - i.r, ah = vh - i.t - i.b;
       [W, H] = contain(aw, ah);
@@ -51,33 +94,143 @@ window.addEventListener("load", () => {
     }
     place(L, T, W, H);
   }
-  layout();
-  window.addEventListener("resize", layout);
-  window.addEventListener("orientationchange", () => setTimeout(layout, 50));
 
-  let sent = false;
-  const ready = () => {
-    if (sent) return; sent = true;
-    try { window.webkit.messageHandlers.pf.postMessage("ready"); } catch (e) {}
-  };
-  p.addEventListener("loadedmetadata", ready);
-  setTimeout(ready, 4000);
+  /* ---------- virtual mouse ---------- */
+  function drawCursor() {
+    curEl.style.display = showCursor ? "block" : "none";
+    curEl.style.transform = "translate(" + cx + "px," + cy + "px)";
+  }
+  function clampCursor() {
+    cx = Math.max(0, Math.min(window.innerWidth - 1, cx));
+    cy = Math.max(0, Math.min(window.innerHeight - 1, cy));
+  }
+  function target() {
+    const sr = player && player.shadowRoot;
+    return (sr && sr.querySelector("canvas")) || player;
+  }
+  function ptr(type, button, buttons) {
+    const t = target(); if (!t) return;
+    t.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, composed: true, view: window,
+      clientX: cx, clientY: cy, screenX: cx, screenY: cy,
+      pointerId: 1, pointerType: "mouse", isPrimary: true, button: button, buttons: buttons
+    }));
+  }
+  const maskOf = (b) => (b === 2 ? 2 : b === 1 ? 4 : 1);
+  function moveBy(dx, dy) { cx += dx; cy += dy; clampCursor(); drawCursor(); ptr("pointermove", -1, 0); }
+  function mdown(b) { ptr("pointerdown", b, maskOf(b)); }
+  function mup(b)   { ptr("pointerup", b, 0); }
+  function click(b) { mdown(b); setTimeout(() => mup(b), 40); }
+
+  /* trackpad gestures (only for real touches while trackpad mode is on) */
+  let ts = null, twoAt = 0;
+  function onTS(e) {
+    if (!trackpad || !e.isTrusted) return;
+    e.preventDefault();
+    if (e.touches.length >= 2) { twoAt = Date.now(); if (ts) { clearTimeout(ts.hold); ts = null; } return; }
+    const t = e.touches[0];
+    ts = { sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, t0: Date.now(), moved: false, drag: false, hold: null };
+    ts.hold = setTimeout(() => { if (ts && !ts.moved) { ts.drag = true; mdown(0); } }, 380);
+  }
+  function onTM(e) {
+    if (!trackpad || !e.isTrusted || !ts) return;
+    e.preventDefault();
+    if (e.touches.length >= 2) return;
+    const t = e.touches[0];
+    if (!ts.moved && Math.hypot(t.clientX - ts.sx, t.clientY - ts.sy) > 6) { ts.moved = true; clearTimeout(ts.hold); }
+    if (ts.moved || ts.drag) moveBy((t.clientX - ts.x) * gain, (t.clientY - ts.y) * gain);
+    ts.x = t.clientX; ts.y = t.clientY;
+  }
+  function onTE(e) {
+    if (!trackpad || !e.isTrusted) return;
+    e.preventDefault();
+    if (e.touches.length === 0) {
+      if (twoAt && Date.now() - twoAt < 350 && !ts) { click(2); twoAt = 0; return; }
+      if (ts) {
+        clearTimeout(ts.hold);
+        if (ts.drag) mup(0);
+        else if (!ts.moved && Date.now() - ts.t0 < 300) click(0);
+        ts = null;
+      }
+    }
+  }
+  const opt = { capture: true, passive: false };
+  window.addEventListener("touchstart", onTS, opt);
+  window.addEventListener("touchmove", onTM, opt);
+  window.addEventListener("touchend", onTE, opt);
+  window.addEventListener("touchcancel", onTE, opt);
+  ["pointerdown", "pointermove", "pointerup", "pointercancel", "mousedown", "mousemove", "mouseup", "click", "contextmenu"]
+    .forEach((n) => window.addEventListener(n, (e) => {
+      if (trackpad && e.isTrusted) { e.stopImmediatePropagation(); e.preventDefault(); }
+    }, opt));
+
+  /* ---------- FPS overlay ---------- */
+  let showFps = q.get("showfps") === "1";
+  setInterval(() => {
+    const S = window.__pf;
+    if (showFps) {
+      const swf = player && player.metadata && player.metadata.frameRate;
+      fpsEl.style.display = "block";
+      fpsEl.textContent = "FPS: " + S.frames + "/" + (S.cap || (swf ? Math.round(swf) : "-"));
+    } else { fpsEl.style.display = "none"; }
+    S.frames = 0;
+  }, 1000);
+
+  /* ---------- start Ruffle ---------- */
+  function start() {
+    const ruffle = window.RufflePlayer.newest();
+    player = ruffle.createPlayer();
+    document.body.appendChild(player);
+    layout(); drawCursor();
+    window.addEventListener("resize", () => { layout(); clampCursor(); drawCursor(); });
+    window.addEventListener("orientationchange", () => setTimeout(() => { layout(); clampCursor(); drawCursor(); }, 60));
+
+    let sent = false;
+    const ready = () => {
+      if (sent) return; sent = true;
+      try { window.webkit.messageHandlers.pf.postMessage("ready"); } catch (e) {}
+    };
+    player.addEventListener("loadedmetadata", ready);
+    setTimeout(ready, 4000);
+
+    const cfg = {
+      url: "g/" + encodeURIComponent(gid) + ".swf",
+      scale: known ? "exactFit" : "showAll",
+      forceScale: true,
+      quality: engine === "perf" ? "low" : (q.get("quality") || "high"),
+      autoplay: "on",
+      splashScreen: false
+    };
+    if (engine === "perf") cfg.preferredRenderer = "webgl";
+    player.load(cfg);
+  }
 
   window.pf = {
-    pause:   () => { try { p.pause(); } catch (e) {} },
-    play:    () => { try { p.play(); } catch (e) {} },
-    mute:    (m) => { try { p.volume = m ? 0 : 1; } catch (e) {} },
-    setMode: (m) => { mode = m; layout(); }
+    pause: () => { try { player.pause(); } catch (e) {} },
+    play:  () => { try { player.play(); } catch (e) {} },
+    mute:  (m) => { try { player.volume = m ? 0 : 1; } catch (e) {} },
+    setMode: (m) => { mode = m; layout(); },
+    setCursor: (show, tp) => { showCursor = !!show; trackpad = !!tp; drawCursor(); },
+    setGain: (g) => { gain = g; },
+    setFps: (n) => { window.__pf.cap = n || 0; },
+    showFps: (b) => { showFps = !!b; },
+    moveBy: moveBy,
+    mouse: (kind, b) => { if (kind === "down") mdown(b); else mup(b); },
+    click: click,
+    exportSaves: () => {
+      const out = {};
+      try {
+        const a = gid, b = encodeURIComponent(gid);
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k.indexOf(a) >= 0 || k.indexOf(b) >= 0) out[k] = localStorage.getItem(k);
+        }
+      } catch (e) {}
+      return JSON.stringify(out);
+    }
   };
 
-  p.load({
-    url: "game.swf",
-    scale: known ? "exactFit" : "showAll",
-    forceScale: true,
-    quality: q.get("quality") || "high",
-    autoplay: "on",
-    splashScreen: false
-  });
-});
+  boot();
+})();
 </script>
 </body></html>
