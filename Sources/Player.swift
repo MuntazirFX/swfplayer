@@ -22,7 +22,46 @@ enum Orient {
     }
 }
 
-// MARK: - Web view + key injection
+// MARK: - Per-game save backup (Flash SharedObjects live in localStorage)
+enum SaveStore {
+    private static let dir: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Saves")
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }()
+
+    private static func path(_ key: String) -> URL {
+        dir.appendingPathComponent(key.replacingOccurrences(of: "/", with: "_") + ".json")
+    }
+
+    static func read(_ key: String) -> String {
+        guard let s = try? String(contentsOf: path(key), encoding: .utf8),
+              let d = s.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: d)) is [String: Any] else { return "{}" }
+        return s
+    }
+
+    static func write(_ json: String, for key: String) {
+        guard json != "{}", !json.isEmpty else { return }
+        try? json.write(to: path(key), atomically: true, encoding: .utf8)
+    }
+}
+
+// MARK: - Game config passed to the web page
+struct GameConfig {
+    var gid: String
+    var scale: String
+    var quality: String
+    var size: CGSize
+    var engine: String
+    var fps: Int
+    var showFps: Bool
+    var showCursor: Bool
+    var trackpad: Bool
+}
+
+// MARK: - Web view holder + JS helpers
 final class WebHolder {
     weak var web: WKWebView?
     var onReady: (() -> Void)?
@@ -34,23 +73,53 @@ final class WebHolder {
         js(script)
     }
 
-    func load(scale: String, quality: String, size: CGSize) {
-        let w = Int(size.width), h = Int(size.height)
-        guard let u = URL(string: "app://localhost/index.html?scale=\(scale)&quality=\(quality)&w=\(w)&h=\(h)") else { return }
+    func tap(code: String, key: String) {
+        self.key("keydown", code: code, key: key)
+        self.key("keyup", code: code, key: key)
+    }
+
+    func load(_ c: GameConfig) {
+        var comps = URLComponents()
+        comps.scheme = "app"
+        comps.host = "localhost"
+        comps.path = "/index.html"
+        comps.queryItems = [
+            URLQueryItem(name: "game", value: c.gid),
+            URLQueryItem(name: "scale", value: c.scale),
+            URLQueryItem(name: "quality", value: c.quality),
+            URLQueryItem(name: "w", value: String(Int(c.size.width))),
+            URLQueryItem(name: "h", value: String(Int(c.size.height))),
+            URLQueryItem(name: "engine", value: c.engine),
+            URLQueryItem(name: "fps", value: String(c.fps)),
+            URLQueryItem(name: "showfps", value: c.showFps ? "1" : "0"),
+            URLQueryItem(name: "cursor", value: c.showCursor ? "1" : "0"),
+            URLQueryItem(name: "trackpad", value: c.trackpad ? "1" : "0")
+        ]
+        guard let u = comps.url else { return }
         web?.load(URLRequest(url: u))
     }
 
-    func setMode(_ mode: String) { js("window.pf&&pf.setMode('\(mode)')") }
-
     func setPaused(_ paused: Bool) { js(paused ? "window.pf&&pf.pause()" : "window.pf&&pf.play()") }
     func setMuted(_ muted: Bool) { js("window.pf&&pf.mute(\(muted))") }
+    func setMode(_ mode: String) { js("window.pf&&pf.setMode('\(mode)')") }
+    func setCursor(show: Bool, trackpad: Bool) { js("window.pf&&pf.setCursor(\(show),\(trackpad))") }
+    func setFps(_ n: Int) { js("window.pf&&pf.setFps(\(n))") }
+    func setShowFps(_ b: Bool) { js("window.pf&&pf.showFps(\(b))") }
+    func setGain(_ g: Double) { js("window.pf&&pf.setGain(\(g))") }
+    func moveCursor(dx: Double, dy: Double) { js("window.pf&&pf.moveBy(\(dx),\(dy))") }
+    func mouse(down: Bool, button: Int) { js("window.pf&&pf.mouse('\(down ? "down" : "up")',\(button))") }
+
+    func exportSaves(_ done: @escaping (String) -> Void) {
+        guard let w = web else { done("{}"); return }
+        w.evaluateJavaScript("window.pf?pf.exportSaves():'{}'") { res, _ in
+            done((res as? String) ?? "{}")
+        }
+    }
 }
 
 struct GameView: UIViewRepresentable {
     let holder: WebHolder
-    let scale: String
-    let quality: String
-    let size: CGSize
+    let config: GameConfig
 
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
@@ -65,6 +134,11 @@ struct GameView: UIViewRepresentable {
         }
         cfg.userContentController.add(bridge, name: "pf")
 
+        let saves = SaveStore.read(config.gid)
+        let script = WKUserScript(source: "window.__saves = \(saves);",
+                                  injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        cfg.userContentController.addUserScript(script)
+
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.isOpaque = false
         wv.backgroundColor = .black
@@ -72,194 +146,23 @@ struct GameView: UIViewRepresentable {
         wv.scrollView.bounces = false
         wv.scrollView.contentInsetAdjustmentBehavior = .never
         holder.web = wv
-        holder.load(scale: scale, quality: quality, size: size)
+        holder.load(config)
         return wv
     }
     func updateUIView(_ wv: WKWebView, context: Context) {}
 }
 
-// MARK: - On-screen controls
-struct KeyButton: View {
-    var label: String = ""
-    var icon: String? = nil
-    let code: String
-    let key: String
-    var size: CGFloat = 58
-    let holder: WebHolder
-    @AppStorage("haptics") private var haptics = true
-    @State private var down = false
-
-    var body: some View {
-        Group {
-            if let icon = icon { Image(systemName: icon).font(.system(size: size * 0.38, weight: .bold)) }
-            else { Text(label).font(.system(size: size * 0.30, weight: .bold)) }
-        }
-        .foregroundColor(.white)
-        .frame(width: size, height: size)
-        .background(Circle().fill(down ? Color.orange : Color.white.opacity(0.22)))
-        .overlay(Circle().stroke(Color.white.opacity(0.5), lineWidth: 1.5))
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    if !down {
-                        down = true
-                        if haptics { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-                        holder.key("keydown", code: code, key: key)
-                    }
-                }
-                .onEnded { _ in
-                    down = false
-                    holder.key("keyup", code: code, key: key)
-                }
-        )
-    }
-}
-
-struct DPad: View {
-    let holder: WebHolder
-    let wasd: Bool
-    let size: CGFloat
-    var body: some View {
-        let s = size
-        VStack(spacing: 4) {
-            KeyButton(icon: "arrowtriangle.up.fill", code: wasd ? "KeyW" : "ArrowUp",
-                      key: wasd ? "w" : "ArrowUp", size: s, holder: holder)
-            HStack(spacing: 4) {
-                KeyButton(icon: "arrowtriangle.left.fill", code: wasd ? "KeyA" : "ArrowLeft",
-                          key: wasd ? "a" : "ArrowLeft", size: s, holder: holder)
-                Color.clear.frame(width: s, height: s)
-                KeyButton(icon: "arrowtriangle.right.fill", code: wasd ? "KeyD" : "ArrowRight",
-                          key: wasd ? "d" : "ArrowRight", size: s, holder: holder)
-            }
-            KeyButton(icon: "arrowtriangle.down.fill", code: wasd ? "KeyS" : "ArrowDown",
-                      key: wasd ? "s" : "ArrowDown", size: s, holder: holder)
-        }
-    }
-}
-
-struct ActionPad: View {
-    let holder: WebHolder
-    let size: CGFloat
-    let extra: Bool
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                KeyButton(label: "Z", code: "KeyZ", key: "z", size: size, holder: holder)
-                KeyButton(label: "X", code: "KeyX", key: "x", size: size, holder: holder)
-            }
-            HStack(spacing: 8) {
-                KeyButton(label: "SPC", code: "Space", key: " ", size: size, holder: holder)
-                KeyButton(label: "ENT", code: "Enter", key: "Enter", size: size, holder: holder)
-            }
-            if extra {
-                HStack(spacing: 8) {
-                    KeyButton(label: "C", code: "KeyC", key: "c", size: size, holder: holder)
-                    KeyButton(label: "SHF", code: "ShiftLeft", key: "Shift", size: size, holder: holder)
-                }
-                HStack(spacing: 8) {
-                    KeyButton(label: "ESC", code: "Escape", key: "Escape", size: size, holder: holder)
-                    KeyButton(label: "R", code: "KeyR", key: "r", size: size, holder: holder)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Option lists
-enum GameOptions {
-    static let screenModes: [(String, String)] = [("auto", "Auto"), ("showAll", "Fit"), ("noBorder", "Fill"), ("exactFit", "Stretch")]
-    static let qualities: [(String, String)] = [("low", "Low"), ("medium", "Medium"), ("high", "High"), ("best", "Best")]
-}
-
-struct ChipPicker: View {
-    let options: [(String, String)]
-    @Binding var selection: String
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(options, id: \.0) { opt in
-                Button { selection = opt.0 } label: {
-                    Text(opt.1)
-                        .font(.footnote.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(selection == opt.0 ? Color.orange : Color.white.opacity(0.12))
-                        .foregroundColor(selection == opt.0 ? .black : .white)
-                        .clipShape(Capsule())
-                }
-            }
-        }
-    }
-}
-
-// MARK: - In-game options panel (display + controls, live)
-struct GameOptionsPanel: View {
-    let onClose: () -> Void
-    @AppStorage("scaleMode") private var scaleMode = "auto"
-    @AppStorage("quality") private var quality = "high"
-    @AppStorage("autoLandscape") private var autoLandscape = true
-    @AppStorage("controlsOn") private var controlsOn = true
-    @AppStorage("wasd") private var wasd = false
-    @AppStorage("extraKeys") private var extraKeys = false
-    @AppStorage("haptics") private var haptics = true
-    @AppStorage("ctrlSize") private var ctrlSize = 58.0
-    @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
-
-    private func heading(_ t: String) -> some View {
-        Text(t).font(.caption.weight(.bold)).foregroundColor(.orange).padding(.top, 4)
-    }
-
-    private var displaySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            heading("DISPLAY")
-            Text("Screen mode").font(.subheadline)
-            ChipPicker(options: GameOptions.screenModes, selection: $scaleMode)
-            Text("Quality (game restarts)").font(.subheadline)
-            ChipPicker(options: GameOptions.qualities, selection: $quality)
-            Toggle("Auto-rotate to match game", isOn: $autoLandscape).tint(.orange)
-        }
-    }
-
-    private var controlsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            heading("CONTROLS")
-            Toggle("On-screen controls", isOn: $controlsOn).tint(.orange)
-            Toggle("WASD instead of arrows", isOn: $wasd).tint(.orange)
-            Toggle("Extra buttons (C, Shift, Esc, R)", isOn: $extraKeys).tint(.orange)
-            Toggle("Haptic feedback", isOn: $haptics).tint(.orange)
-            Text("Button size: \(Int(ctrlSize))").font(.subheadline)
-            Slider(value: $ctrlSize, in: 40...80, step: 2).tint(.orange)
-            Text("Opacity: \(Int(ctrlOpacity * 100))%").font(.subheadline)
-            Slider(value: $ctrlOpacity, in: 0.2...1.0).tint(.orange)
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Game Options").font(.headline)
-                Spacer()
-                Button("Done", action: onClose).font(.body.weight(.semibold)).foregroundColor(.orange)
-            }
-            .padding(16)
-            Divider().background(Color.white.opacity(0.15))
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    displaySection
-                    controlsSection
-                }
-                .padding(16)
-            }
-        }
-        .foregroundColor(.white)
-        .background(Color(red: 0.08, green: 0.07, blue: 0.14).opacity(0.97))
-        .cornerRadius(20)
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.12), lineWidth: 1))
-    }
+// MARK: - Side bar item
+struct SideItem: Identifiable {
+    let id: String
+    let icon: String
+    let on: Bool
+    let action: () -> Void
 }
 
 // MARK: - Player screen
 struct PlayerScreen: View {
+    let gameKey: String
     let name: String
     let gameSize: CGSize
     let needThumb: Bool
@@ -267,24 +170,78 @@ struct PlayerScreen: View {
     let onClose: () -> Void
 
     @AppStorage("controlsOn") private var controlsOn = true
+    @AppStorage("controlStyle") private var controlStyle = "buttons"
+    @AppStorage("padLayout") private var padLayout = "simple"
+    @AppStorage("mirror") private var mirror = false
+    @AppStorage("dir8") private var dir8 = true
     @AppStorage("wasd") private var wasd = false
     @AppStorage("scaleMode") private var scaleMode = "auto"
     @AppStorage("quality") private var quality = "high"
+    @AppStorage("engine") private var engine = "standard"
+    @AppStorage("fpsCap") private var fpsCap = "0"
+    @AppStorage("showFps") private var showFps = false
     @AppStorage("ctrlSize") private var ctrlSize = 58.0
     @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
     @AppStorage("extraKeys") private var extraKeys = false
     @AppStorage("autoLandscape") private var autoLandscape = true
+    @AppStorage("cursorMode") private var cursorMode = false
+    @AppStorage("cursorSpeed") private var cursorSpeed = 9.0
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var pads = GamepadManager.shared
+
     @State private var holder = WebHolder()
     @State private var loading = true
     @State private var paused = false
     @State private var muted = false
     @State private var landscape = false
     @State private var showOptions = false
+    @State private var showMapping = false
+    @State private var barOpen = true
+    @State private var pencil = false
+    @State private var strokes: [Stroke] = []
+    @State private var penIndex = 0
+    @State private var keyboardOn = false
+    @State private var confirmExit = false
+    @State private var thumbDone = false
 
-    private func roundIcon(_ system: String) -> some View {
-        Image(systemName: system).foregroundColor(.white).padding(10)
-            .background(Color.black.opacity(0.55)).clipShape(Circle())
+    private let penColors: [Color] = [.red, .yellow, .green, .white, .cyan]
+    private let autosave = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    // MARK: helpers
+    private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+
+    private var cursorVisible: Bool {
+        if cursorMode { return true }
+        if controlsOn && controlStyle == "dual" { return true }
+        if !pads.names.isEmpty && (pads.config.leftStickMouse || pads.config.rightStickMouse) { return true }
+        return false
+    }
+
+    private var syncKey: String {
+        "\(fpsCap)|\(showFps)|\(cursorSpeed)|\(cursorMode)|\(cursorVisible)"
+    }
+
+    private func config() -> GameConfig {
+        GameConfig(gid: gameKey, scale: scaleMode, quality: quality, size: gameSize,
+                   engine: engine, fps: Int(fpsCap) ?? 0, showFps: showFps,
+                   showCursor: cursorVisible, trackpad: cursorMode)
+    }
+
+    private func syncJS() {
+        holder.setCursor(show: cursorVisible, trackpad: cursorMode)
+        holder.setFps(Int(fpsCap) ?? 0)
+        holder.setShowFps(showFps)
+        holder.setGain(0.5 + cursorSpeed / 9.0)
+        if muted { holder.setMuted(true) }
+    }
+
+    private func roundIcon(_ system: String, on: Bool = false) -> some View {
+        Image(systemName: system)
+            .foregroundColor(on ? .black : .white)
+            .frame(width: 20, height: 20)
+            .padding(10)
+            .background(on ? Color.orange : Color.black.opacity(0.55))
+            .clipShape(Circle())
     }
 
     private func snapshot() {
@@ -294,16 +251,130 @@ struct PlayerScreen: View {
         }
     }
 
-    private func close() {
+    private func saveNow() {
+        holder.exportSaves { json in SaveStore.write(json, for: gameKey) }
+    }
+
+    private func reload() {
+        loading = true
+        paused = false
+        holder.load(config())
+    }
+
+    private func setOrientation(_ land: Bool) {
+        landscape = land
+        Orient.set(land ? .landscape : .portrait)
+    }
+
+    private func requestExit() {
         holder.setPaused(true)
+        confirmExit = true
+    }
+
+    private func leave() {
+        holder.exportSaves { json in
+            SaveStore.write(json, for: gameKey)
+            finish()
+        }
+    }
+
+    private func finish() {
+        GamepadManager.shared.detach()
         if landscape { Orient.set(.portrait) }
         onClose()
     }
 
-    var body: some View {
+    private func togglePencil() {
+        pencil.toggle()
+        if !pencil { strokes.removeAll() }
+    }
+
+    private var sideItems: [SideItem] {
+        var a: [SideItem] = []
+        a.append(SideItem(id: "exit", icon: "xmark", on: false, action: { requestExit() }))
+        a.append(SideItem(id: "reload", icon: "arrow.clockwise", on: false, action: { reload() }))
+        a.append(SideItem(id: "pause", icon: paused ? "play.fill" : "pause.fill", on: paused,
+                          action: { paused.toggle(); holder.setPaused(paused) }))
+        a.append(SideItem(id: "options", icon: "gearshape.fill", on: showOptions,
+                          action: { showOptions.toggle() }))
+        a.append(SideItem(id: "touch", icon: "hand.tap.fill", on: cursorMode,
+                          action: { cursorMode.toggle() }))
+        a.append(SideItem(id: "mapping", icon: "gamecontroller", on: false,
+                          action: { showMapping = true }))
+        a.append(SideItem(id: "pencil", icon: "pencil", on: pencil, action: { togglePencil() }))
+        a.append(SideItem(id: "keyboard", icon: "keyboard", on: keyboardOn,
+                          action: { keyboardOn.toggle() }))
+        a.append(SideItem(id: "controls", icon: "circle.grid.cross.fill", on: controlsOn,
+                          action: { controlsOn.toggle() }))
+        a.append(SideItem(id: "mute", icon: muted ? "speaker.slash.fill" : "speaker.wave.2.fill", on: muted,
+                          action: { muted.toggle(); holder.setMuted(muted) }))
+        if isPhone {
+            a.append(SideItem(id: "rotate", icon: "rotate.right", on: false,
+                              action: { setOrientation(!landscape) }))
+        }
+        return a
+    }
+
+    // MARK: overlays
+    @ViewBuilder private var controlsOverlay: some View {
+        if controlStyle == "dual" {
+            DualSticks(holder: holder, size: ctrlSize * 2.1, mirror: mirror, wasd: wasd, dir8: dir8)
+                .opacity(ctrlOpacity)
+        } else {
+            VStack {
+                Spacer()
+                KeyPads(holder: holder, layout: padLayout, wasd: wasd, size: ctrlSize,
+                        extra: extraKeys, mirror: mirror)
+                    .padding(.horizontal, 20).padding(.bottom, 24)
+            }
+            .opacity(ctrlOpacity)
+        }
+    }
+
+    private var sideBar: some View {
+        VStack {
+            HStack(alignment: .top, spacing: 8) {
+                Button { barOpen.toggle() } label: {
+                    roundIcon(barOpen ? "chevron.left" : "line.3.horizontal")
+                }
+                if barOpen {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(sideItems) { it in
+                                Button(action: it.action) { roundIcon(it.icon, on: it.on) }
+                            }
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.top, 8)
+            Spacer()
+        }
+    }
+
+    @ViewBuilder private var optionsOverlay: some View {
+        GeometryReader { geo in
+            let wide = geo.size.width > geo.size.height
+            let al: Alignment = wide ? .trailing : .bottom
+            ZStack(alignment: al) {
+                Color.black.opacity(0.25).ignoresSafeArea()
+                    .onTapGesture { showOptions = false }
+                GameOptionsPanel(onClose: { showOptions = false },
+                                 onReload: { reload() },
+                                 onOrientation: { setOrientation($0) },
+                                 onMapping: { showOptions = false; showMapping = true })
+                    .frame(width: wide ? min(400, geo.size.width * 0.55) : nil)
+                    .frame(maxHeight: wide ? geo.size.height - 16 : geo.size.height * 0.7)
+                    .padding(8)
+            }
+        }
+    }
+
+    private var content: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            GameView(holder: holder, scale: scaleMode, quality: quality, size: gameSize).ignoresSafeArea()
+            GameView(holder: holder, config: config()).ignoresSafeArea()
 
             if loading {
                 VStack(spacing: 12) {
@@ -313,83 +384,68 @@ struct PlayerScreen: View {
                 .allowsHitTesting(false)
             }
 
-            if controlsOn {
+            if controlsOn { controlsOverlay }
+
+            if pencil {
+                AnnotationLayer(strokes: $strokes, color: penColors[min(penIndex, penColors.count - 1)])
                 VStack {
                     Spacer()
-                    HStack(alignment: .bottom) {
-                        DPad(holder: holder, wasd: wasd, size: ctrlSize * 0.93)
-                        Spacer()
-                        ActionPad(holder: holder, size: ctrlSize, extra: extraKeys)
-                    }
-                    .padding(.horizontal, 20).padding(.bottom, 24)
+                    AnnotationBar(strokes: $strokes, colorIndex: $penIndex, colors: penColors,
+                                  onDone: { togglePencil() })
+                        .padding(.bottom, 16)
                 }
-                .opacity(ctrlOpacity)
             }
 
-            VStack {
-                HStack(spacing: 10) {
-                    Button(action: close) { roundIcon("xmark") }
-                    Spacer()
-                    Button {
-                        paused.toggle()
-                        holder.setPaused(paused)
-                    } label: { roundIcon(paused ? "play.fill" : "pause.fill") }
-                    Button {
-                        muted.toggle()
-                        holder.setMuted(muted)
-                    } label: { roundIcon(muted ? "speaker.slash.fill" : "speaker.wave.2.fill") }
-                    if UIDevice.current.userInterfaceIdiom == .phone {
-                        Button {
-                            landscape.toggle()
-                            Orient.set(landscape ? .landscape : .portrait)
-                        } label: { roundIcon("rotate.right") }
-                    }
-                    Button { showOptions.toggle() } label: { roundIcon("slider.horizontal.3") }
-                    Button { controlsOn.toggle() } label: {
-                        roundIcon(controlsOn ? "gamecontroller.fill" : "gamecontroller")
-                    }
-                }
-                .padding(.horizontal, 12).padding(.top, 8)
-                Spacer()
+            if keyboardOn {
+                KeyboardCapture(holder: holder, onClose: { keyboardOn = false })
             }
 
-            if showOptions {
-                GeometryReader { geo in
-                    ZStack(alignment: .bottom) {
-                        Color.black.opacity(0.25).ignoresSafeArea()
-                            .onTapGesture { showOptions = false }
-                        GameOptionsPanel(onClose: { showOptions = false })
-                            .frame(maxWidth: 440)
-                            .frame(maxHeight: max(220, geo.size.height * 0.65))
-                            .padding(10)
+            sideBar
+
+            if showOptions { optionsOverlay }
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+
+    var body: some View {
+        content
+            .statusBarHidden(true)
+            .alert("Exit game?", isPresented: $confirmExit) {
+                Button("Cancel", role: .cancel) { if !paused { holder.setPaused(false) } }
+                Button("Leave game", role: .destructive) { leave() }
+            } message: {
+                Text("Your game is paused. Are you sure you want to leave?\nSave data will sync before exit.")
+            }
+            .sheet(isPresented: $showMapping) { GamepadMappingView(gameName: name) }
+            .onAppear {
+                GamepadManager.shared.attach(holder: holder, gameKey: gameKey)
+                holder.onReady = {
+                    loading = false
+                    syncJS()
+                    if needThumb && !thumbDone {
+                        thumbDone = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { snapshot() }
+                    }
+                }
+                if autoLandscape {
+                    if gameSize.width > gameSize.height * 1.05 {
+                        landscape = true
+                        Orient.set(.landscape)
+                    } else if gameSize.height > gameSize.width * 1.05 {
+                        Orient.set(.portrait)
                     }
                 }
             }
-        }
-        .statusBarHidden(true)
-        .onAppear {
-            holder.onReady = {
-                loading = false
-                if needThumb {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { snapshot() }
+            .onChange(of: scaleMode) { m in holder.setMode(m) }
+            .onChange(of: syncKey) { _ in syncJS() }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    holder.setPaused(paused)
+                } else {
+                    holder.setPaused(true)
+                    saveNow()
                 }
             }
-            if autoLandscape {
-                if gameSize.width > gameSize.height * 1.05 {
-                    landscape = true
-                    Orient.set(.landscape)
-                } else if gameSize.height > gameSize.width * 1.05 {
-                    Orient.set(.portrait)
-                }
-            }
-        }
-        .onChange(of: scaleMode) { m in holder.setMode(m) }
-        .onChange(of: quality) { _ in
-            loading = true
-            holder.load(scale: scaleMode, quality: quality, size: gameSize)
-        }
-        .onChange(of: scenePhase) { phase in
-            if phase == .active { holder.setPaused(paused) } else { holder.setPaused(true) }
-        }
+            .onReceive(autosave) { _ in saveNow() }
     }
 }

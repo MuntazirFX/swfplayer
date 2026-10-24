@@ -11,7 +11,7 @@ final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
         var path = url.path
         if path == "/" || path.isEmpty { path = "/index.html" }
         var data: Data?
-        if path == "/game.swf" {
+        if path == "/game.swf" || (path.hasPrefix("/g/") && path.lowercased().hasSuffix(".swf")) {
             data = GameStore.data
         } else if let base = Bundle.main.resourceURL?.appendingPathComponent("www") {
             data = try? Data(contentsOf: base.appendingPathComponent(path))

@@ -12,6 +12,10 @@ struct SettingsView: View {
     @AppStorage("haptics") private var haptics = true
     @AppStorage("ctrlSize") private var ctrlSize = 58.0
     @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
+    @AppStorage("engine") private var engine = "standard"
+    @AppStorage("fpsCap") private var fpsCap = "0"
+    @AppStorage("showFps") private var showFps = false
+    @AppStorage("cursorSpeed") private var cursorSpeed = 9.0
 
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
@@ -35,6 +39,22 @@ struct SettingsView: View {
                     }
                     Toggle("Auto-rotate to match game", isOn: $autoLandscape)
                 }
+                Section(header: Text("Performance"),
+                        footer: Text("Performance uses direct WebGL and low quality. Original loads the latest Ruffle from the internet.")) {
+                    Picker("Flash engine", selection: $engine) {
+                        Text("Standard").tag("standard")
+                        Text("Performance").tag("perf")
+                        Text("Original (online)").tag("cdn")
+                    }
+                    Picker("Frame rate", selection: $fpsCap) {
+                        Text("Default").tag("0")
+                        Text("30 FPS").tag("30")
+                        Text("40 FPS").tag("40")
+                        Text("50 FPS").tag("50")
+                        Text("60 FPS").tag("60")
+                    }
+                    Toggle("Show FPS counter", isOn: $showFps)
+                }
                 Section(header: Text("Controls")) {
                     Toggle("On-screen controls", isOn: $controlsOn)
                     Toggle("WASD instead of arrows", isOn: $wasd)
@@ -43,6 +63,10 @@ struct SettingsView: View {
                     VStack(alignment: .leading) {
                         Text("Button size: \(Int(ctrlSize))")
                         Slider(value: $ctrlSize, in: 40...80, step: 2)
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Cursor speed: \(Int(cursorSpeed))")
+                        Slider(value: $cursorSpeed, in: 1...18, step: 1)
                     }
                     VStack(alignment: .leading) {
                         Text("Opacity: \(Int(ctrlOpacity * 100))%")
