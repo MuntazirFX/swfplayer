@@ -1,20 +1,113 @@
 name: Build unsigned IPA
 on:
   workflow_dispatch:
+    inputs:
+      ruffle_from_source:
+        description: "Build Ruffle from source first (slow: 30-60 min, free ubuntu runner)"
+        type: boolean
+        default: false
+      ruffle_ref:
+        description: "Ruffle git ref to build (branch or tag), only used when building from source"
+        type: string
+        default: "master"
 jobs:
+  ruffle:
+    name: Build Ruffle from source
+    if: ${{ inputs.ruffle_from_source }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ruffle-rs/ruffle
+          ref: ${{ inputs.ruffle_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ruffle-web
+      - name: Install wasm-bindgen-cli (version must match the crate)
+        run: |
+          V=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | cut -d'"' -f2)
+          echo "wasm-bindgen crate version: $V"
+          cargo install wasm-bindgen-cli --version "$V" --locked
+      - name: Install binaryen (wasm-opt)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p bin
+          gh release download --repo WebAssembly/binaryen --pattern 'binaryen-*-x86_64-linux.tar.gz' --dir bin
+          tar -xzf bin/binaryen-*-x86_64-linux.tar.gz -C bin
+          P=$(echo "$PWD"/bin/binaryen-*/bin)
+          echo "$P" >> "$GITHUB_PATH"
+          "$P/wasm-opt" --version
+      - name: Build web (both wasm variants if available)
+        working-directory: web
+        run: |
+          npm ci
+          if npm run build:dual-wasm; then
+            echo "Built with build:dual-wasm"
+          else
+            echo "::warning::build:dual-wasm failed or missing, falling back to npm run build"
+            npm run build
+          fi
+      - name: Package selfhosted build
+        run: |
+          DIST=$(find web/packages/selfhosted -maxdepth 2 -type d -name dist | head -1)
+          echo "dist folder: $DIST"
+          ls -la "$DIST"
+          test -f "$DIST/ruffle.js"
+          ls "$DIST"/*.wasm
+          du -h "$DIST"/*.wasm
+          (cd "$DIST" && zip -qr "$GITHUB_WORKSPACE/ruffle-selfhosted.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruffle-selfhosted
+          path: ruffle-selfhosted.zip
   build:
+    name: Build IPA
+    needs: [ruffle]
+    if: ${{ !cancelled() && (needs.ruffle.result == 'success' || needs.ruffle.result == 'skipped') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Download Ruffle
+      - name: Download Ruffle (newest nightly)
+        if: ${{ !inputs.ruffle_from_source }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dl www/ruffle
-          gh release download --repo ruffle-rs/ruffle --pattern '*web-selfhosted.zip' --dir dl
+          TAG=$(gh release list --repo ruffle-rs/ruffle --limit 1 --json tagName --jq '.[0].tagName')
+          echo "Using Ruffle release: $TAG"
+          gh release download "$TAG" --repo ruffle-rs/ruffle --pattern '*web-selfhosted.zip' --dir dl
           unzip -o dl/*.zip -d www/ruffle
+      - name: Use Ruffle built from source
+        if: ${{ inputs.ruffle_from_source }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ruffle-selfhosted
+          path: ruffle-src
+      - name: Unpack Ruffle built from source
+        if: ${{ inputs.ruffle_from_source }}
+        run: |
+          mkdir -p www/ruffle
+          unzip -o ruffle-src/ruffle-selfhosted.zip -d www/ruffle
+      - name: Trim debug files from Ruffle
+        run: |
+          find www/ruffle -name '*.map' -delete
+          du -sh www/ruffle
+          ls -la www/ruffle | head -30
       - name: Make app icon
         run: |
           python3 -m venv .venv
