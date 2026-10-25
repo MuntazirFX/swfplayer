@@ -23,7 +23,13 @@ jobs:
           ref: ${{ inputs.ruffle_ref }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+      - name: Show tool versions
+        run: |
+          node --version
+          npm --version
+          java -version || true
+          rustc --version || true
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
