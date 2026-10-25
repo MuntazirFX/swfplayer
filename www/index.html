@@ -12,9 +12,9 @@ ruffle-player{position:fixed;display:block}
   font:600 13px -apple-system,Helvetica,Arial,sans-serif;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:8px}
 </style>
 <script>
-/* Frame-rate cap + counter: must run BEFORE Ruffle so its animation loop is wrapped. */
+/* Frame-rate cap + counter: runs BEFORE Ruffle so its animation loop is wrapped. */
 (function () {
-  var S = window.__pf = { cap: 0, frames: 0, lastT: -1 };
+  var S = window.__pf = { cap: 0, auto: true, frames: 0, lastT: -1 };
   var raf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = function (cb) {
     return raf(function wrap(t) {
@@ -31,25 +31,35 @@ ruffle-player{position:fixed;display:block}
   const q = new URLSearchParams(location.search);
   const gid = q.get("game") || "game";
   const engine = q.get("engine") || "standard";   // standard | perf | cdn
+  const renderer = q.get("renderer") || "auto";   // auto | webgpu | webgl | canvas
   let mode = q.get("scale") || "auto";            // auto | showAll (fit) | noBorder (fill) | exactFit (stretch)
   let sw = parseInt(q.get("w")) || 0, sh = parseInt(q.get("h")) || 0;
   const known = sw > 0 && sh > 0;
   let showCursor = q.get("cursor") === "1";
   let trackpad = q.get("trackpad") === "1";
   let gain = 1.5;
-  window.__pf.cap = parseInt(q.get("fps")) || 0;
+  let userPaused = false;
+  const born = Date.now();
 
-  /* Render resolution: Ruffle sizes its canvas by devicePixelRatio (3x on most iPhones).
-     Lowering it cuts the pixel count a lot and is the biggest speed-up on phones. */
-  try {
-    const want = parseFloat(q.get("dpr")) || 0;
-    const real = window.devicePixelRatio || 1;
-    if (want > 0 && want < real) {
-      Object.defineProperty(window, "devicePixelRatio", { get: () => want, configurable: true });
-    }
-  } catch (e) {}
+  const S = window.__pf;
+  const fpsParam = parseInt(q.get("fps")) || 0;
+  S.auto = fpsParam === 0;
+  S.cap = fpsParam;
 
-  /* Restore backed-up save data (never overwrite what WebKit already has). */
+  function post(m) { try { window.webkit.messageHandlers.pf.postMessage(m); } catch (e) {} }
+
+  /* ---- Render resolution (devicePixelRatio override) ----
+     "auto" = just enough pixels for the game's own size (about 1.25x), never more than the screen has. */
+  const realDpr = window.devicePixelRatio || 1;
+  const dprMode = q.get("dpr") || "auto";         // auto | 0 (native) | number
+  let curDpr = Math.min(realDpr, 2);
+  if (dprMode !== "auto") {
+    const v = parseFloat(dprMode);
+    curDpr = v > 0 ? Math.min(v, realDpr) : realDpr;
+  }
+  try { Object.defineProperty(window, "devicePixelRatio", { get: () => curDpr, configurable: true }); } catch (e) {}
+
+  /* ---- Restore backed-up save data (never overwrite what WebKit already has) ---- */
   try {
     if (window.__saves) for (const k in window.__saves) {
       if (localStorage.getItem(k) === null) localStorage.setItem(k, window.__saves[k]);
@@ -87,7 +97,8 @@ ruffle-player{position:fixed;display:block}
   function layout() {
     if (!player) return;
     const vw = window.innerWidth, vh = window.innerHeight;
-    if (!known) { place(0, 0, vw, vh); return; }
+    if (!vw || !vh) return;                          // view not sized yet (e.g. mid-rotation)
+    if (!known) { place(0, 0, vw, vh); return; }     // Ruffle letterboxes by itself
     const ar = sw / sh;
     const contain = (aw, ah) => { let w = aw, h = w / ar; if (h > ah) { h = ah; w = h * ar; } return [w, h]; };
     const cover   = (aw, ah) => { let w = aw, h = w / ar; if (h < ah) { h = ah; w = h * ar; } return [w, h]; };
@@ -102,10 +113,16 @@ ruffle-player{position:fixed;display:block}
       [W, H] = contain(aw, ah);
       L = i.l + (aw - W) / 2; T = i.t + (ah - H) / 2;
     }
+    if (dprMode === "auto") {
+      let nd = (sw * 1.25) / Math.max(W, 1);
+      nd = Math.max(1, Math.min(realDpr, nd));
+      curDpr = Math.round(nd * 4) / 4;
+    }
     place(L, T, W, H);
   }
 
   /* ---------- virtual mouse ---------- */
+  let btnMask = 0;
   function drawCursor() {
     curEl.style.display = showCursor ? "block" : "none";
     curEl.style.transform = "translate(" + cx + "px," + cy + "px)";
@@ -127,41 +144,41 @@ ruffle-player{position:fixed;display:block}
     }));
   }
   const maskOf = (b) => (b === 2 ? 2 : b === 1 ? 4 : 1);
-  function moveBy(dx, dy) { cx += dx; cy += dy; clampCursor(); drawCursor(); ptr("pointermove", -1, 0); }
-  function mdown(b) { ptr("pointerdown", b, maskOf(b)); }
-  function mup(b)   { ptr("pointerup", b, 0); }
+  function moveBy(dx, dy) { cx += dx; cy += dy; clampCursor(); drawCursor(); ptr("pointermove", -1, btnMask); }
+  function mdown(b) { btnMask |= maskOf(b); ptr("pointerdown", b, btnMask); }
+  function mup(b)   { btnMask &= ~maskOf(b); ptr("pointerup", b, btnMask); }
   function click(b) { mdown(b); setTimeout(() => mup(b), 40); }
 
-  /* trackpad gestures (only for real touches while trackpad mode is on) */
-  let ts = null, twoAt = 0;
+  /* Cursor ("trackpad") mode: drag = move the pointer, quick tap = click at the pointer.
+     Nothing else: no hold-to-drag. Use the on-screen mouse buttons to hold a click while moving. */
+  let ts = null;
   function onTS(e) {
     if (!trackpad || !e.isTrusted) return;
     e.preventDefault();
-    if (e.touches.length >= 2) { twoAt = Date.now(); if (ts) { clearTimeout(ts.hold); ts = null; } return; }
-    const t = e.touches[0];
-    ts = { sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, t0: Date.now(), moved: false, drag: false, hold: null };
-    ts.hold = setTimeout(() => { if (ts && !ts.moved) { ts.drag = true; mdown(0); } }, 380);
+    if (ts) return;
+    const t = e.changedTouches[0];
+    ts = { id: t.identifier, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, t0: Date.now(), moved: false };
   }
   function onTM(e) {
-    if (!trackpad || !e.isTrusted || !ts) return;
+    if (!trackpad || !e.isTrusted) return;
     e.preventDefault();
-    if (e.touches.length >= 2) return;
-    const t = e.touches[0];
-    if (!ts.moved && Math.hypot(t.clientX - ts.sx, t.clientY - ts.sy) > 6) { ts.moved = true; clearTimeout(ts.hold); }
-    if (ts.moved || ts.drag) moveBy((t.clientX - ts.x) * gain, (t.clientY - ts.y) * gain);
-    ts.x = t.clientX; ts.y = t.clientY;
+    if (!ts) return;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      if (t.identifier !== ts.id) continue;
+      if (!ts.moved && Math.hypot(t.clientX - ts.sx, t.clientY - ts.sy) > 8) ts.moved = true;
+      if (ts.moved) moveBy((t.clientX - ts.x) * gain, (t.clientY - ts.y) * gain);
+      ts.x = t.clientX; ts.y = t.clientY;
+    }
   }
   function onTE(e) {
     if (!trackpad || !e.isTrusted) return;
     e.preventDefault();
-    if (e.touches.length === 0) {
-      if (twoAt && Date.now() - twoAt < 350 && !ts) { click(2); twoAt = 0; return; }
-      if (ts) {
-        clearTimeout(ts.hold);
-        if (ts.drag) mup(0);
-        else if (!ts.moved && Date.now() - ts.t0 < 300) click(0);
-        ts = null;
-      }
+    if (!ts) return;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier !== ts.id) continue;
+      if (!ts.moved && Date.now() - ts.t0 < 250) click(0);
+      ts = null;
     }
   }
   const opt = { capture: true, passive: false };
@@ -174,15 +191,26 @@ ruffle-player{position:fixed;display:block}
       if (trackpad && e.isTrusted) { e.stopImmediatePropagation(); e.preventDefault(); }
     }, opt));
 
-  /* ---------- FPS overlay ---------- */
+  /* ---------- auto frame cap: match the game's own frame rate on a rate the display can hit ---------- */
+  function applyAutoCap() {
+    if (!S.auto) return;
+    const fr = player && player.metadata && player.metadata.frameRate;
+    S.cap = fr ? (fr <= 30.5 ? 30 : 60) : 0;
+  }
+
+  /* ---------- FPS overlay + "stuck" watchdog ---------- */
   let showFps = q.get("showfps") === "1";
+  let zero = 0, stuckSent = false;
   setInterval(() => {
-    const S = window.__pf;
     if (showFps) {
       const swf = player && player.metadata && player.metadata.frameRate;
       fpsEl.style.display = "block";
       fpsEl.textContent = "FPS: " + S.frames + "/" + (S.cap || (swf ? Math.round(swf) : "-"));
     } else { fpsEl.style.display = "none"; }
+    if (player && !userPaused && document.visibilityState === "visible" && Date.now() - born > 6000) {
+      zero = S.frames === 0 ? zero + 1 : 0;
+      if (zero >= 6 && !stuckSent) { stuckSent = true; post("stuck"); }
+    }
     S.frames = 0;
   }, 1000);
 
@@ -198,31 +226,33 @@ ruffle-player{position:fixed;display:block}
     let sent = false;
     const ready = () => {
       if (sent) return; sent = true;
-      try { window.webkit.messageHandlers.pf.postMessage("ready"); } catch (e) {}
+      applyAutoCap();
+      post("ready");
     };
-    player.addEventListener("loadedmetadata", ready);
+    player.addEventListener("loadedmetadata", () => { applyAutoCap(); ready(); });
     setTimeout(ready, 4000);
 
     const cfg = {
       url: "g/" + encodeURIComponent(gid) + ".swf",
       scale: known ? "exactFit" : "showAll",
       forceScale: true,
-      quality: engine === "perf" ? "low" : (q.get("quality") || "high"),
+      quality: engine === "perf" ? "low" : (q.get("quality") || "low"),
       autoplay: "on",
       splashScreen: false
     };
-    if (engine === "perf") cfg.preferredRenderer = "webgl";
+    if (renderer !== "auto") cfg.preferredRenderer = renderer;
+    else if (engine === "perf") cfg.preferredRenderer = "webgl";
     player.load(cfg);
   }
 
   window.pf = {
-    pause: () => { try { player.pause(); } catch (e) {} },
-    play:  () => { try { player.play(); } catch (e) {} },
+    pause: () => { userPaused = true; try { player.pause(); } catch (e) {} },
+    play:  () => { userPaused = false; zero = 0; try { player.play(); } catch (e) {} },
     mute:  (m) => { try { player.volume = m ? 0 : 1; } catch (e) {} },
     setMode: (m) => { mode = m; layout(); },
     setCursor: (show, tp) => { showCursor = !!show; trackpad = !!tp; drawCursor(); },
     setGain: (g) => { gain = g; },
-    setFps: (n) => { window.__pf.cap = n || 0; },
+    setFps: (n) => { S.auto = !n; S.cap = n || 0; if (S.auto) applyAutoCap(); },
     showFps: (b) => { showFps = !!b; },
     moveBy: moveBy,
     mouse: (kind, b) => { if (kind === "down") mdown(b); else mup(b); },
