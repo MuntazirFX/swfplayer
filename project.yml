@@ -15,7 +15,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.swfplayer.app
         PRODUCT_NAME: SWFPlayer
-        MARKETING_VERSION: "2.4"
+        MARKETING_VERSION: "2.5"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_FILE: SWFPlayer-Info.plist
