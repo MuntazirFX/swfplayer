@@ -22,7 +22,6 @@ struct ContentView: View {
     @State private var playing: URL?
     @State private var info: String?
     @State private var deleteTarget: URL?
-    @State private var showWeb = false
 
     private var sorted: [URL] {
         var list = lib.files
@@ -94,21 +93,12 @@ struct ContentView: View {
                         (Text("SWF ").foregroundColor(.white) + Text("Player").foregroundColor(.orange))
                             .font(.system(size: 36, weight: .heavy))
                         Spacer()
-                        HStack(spacing: 10) {
-                            Button { showWeb = true } label: {
-                                Image(systemName: "globe").foregroundColor(.orange)
-                                    .padding(10).background(Color.white.opacity(0.08)).clipShape(Circle())
-                            }
-                            Button { sheet = .settings } label: {
-                                Image(systemName: "gearshape.fill").foregroundColor(.gray)
-                                    .padding(10).background(Color.white.opacity(0.08)).clipShape(Circle())
-                            }
+                        Button { sheet = .settings } label: {
+                            Image(systemName: "gearshape.fill").foregroundColor(.gray)
+                                .padding(10).background(Color.white.opacity(0.08)).clipShape(Circle())
                         }
                     }
                     .padding(.top, 12)
-                    .fullScreenCover(isPresented: $showWeb) {
-                        WebGamesView(onClose: { showWeb = false })
-                    }
 
                     HStack {
                         Image(systemName: "magnifyingglass").foregroundColor(.gray)
