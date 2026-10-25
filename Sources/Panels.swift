@@ -5,15 +5,16 @@ enum GameOptions {
     static let engines: [(String, String)] = [("standard", "Standard"), ("perf", "Performance"), ("cdn", "Original")]
     static let screenModes: [(String, String)] = [("auto", "Auto"), ("showAll", "Fit"), ("noBorder", "Fill"), ("exactFit", "Stretch")]
     static let qualities: [(String, String)] = [("low", "Low"), ("medium", "Medium"), ("high", "High"), ("best", "Best")]
-    static let resolutions: [(String, String)] = [("0", "Native"), ("2", "2x"), ("1.5", "1.5x"), ("1", "1x")]
-    static let fpsCaps: [(String, String)] = [("0", "Default"), ("30", "30"), ("40", "40"), ("50", "50"), ("60", "60")]
+    static let resolutions: [(String, String)] = [("auto", "Auto"), ("0", "Native"), ("2", "2x"), ("1.5", "1.5x"), ("1", "1x")]
+    static let renderers: [(String, String)] = [("auto", "Auto"), ("webgpu", "WebGPU"), ("webgl", "WebGL"), ("canvas", "Canvas")]
+    static let fpsCaps: [(String, String)] = [("0", "Auto"), ("20", "20"), ("30", "30"), ("60", "60")]
     static let layouts: [(String, String)] = [("simple", "Simple"), ("focus", "Focus"), ("double", "Double"), ("quadra", "Quadra")]
     static let styles: [(String, String)] = [("buttons", "Buttons"), ("dual", "Dual sticks")]
     static let touchModes: [(String, String)] = [("direct", "Direct touch"), ("cursor", "Cursor")]
     static let moves: [(String, String)] = [("dpad", "D-Pad"), ("joystick", "Joystick")]
     static let dirs: [(String, String)] = [("8", "8-Directions"), ("4", "4-Directions")]
 
-    static let resetKeys = ["scaleMode", "quality", "resolution", "engine", "fpsCap", "showFps", "controlsOn", "controlStyle",
+    static let resetKeys = ["scaleMode", "quality", "resolution", "renderer", "engine", "fpsCap", "showFps", "controlsOn", "controlStyle",
                             "padLayout", "mirror", "dir8", "wasd", "moveType", "haptics", "ctrlSize",
                             "ctrlOpacity", "autoLandscape", "cursorMode", "cursorSpeed"]
 }
@@ -50,7 +51,8 @@ struct GameOptionsPanel: View {
 
     @AppStorage("scaleMode") private var scaleMode = "auto"
     @AppStorage("quality") private var quality = "low"
-    @AppStorage("resolution") private var resolution = "2"
+    @AppStorage("resolution") private var resolution = "auto"
+    @AppStorage("renderer") private var renderer = "auto"
     @AppStorage("engine") private var engine = "standard"
     @AppStorage("fpsCap") private var fpsCap = "0"
     @AppStorage("showFps") private var showFps = false
@@ -71,10 +73,11 @@ struct GameOptionsPanel: View {
     @State private var tab = 0
     @State private var pendEngine = "standard"
     @State private var pendQuality = "low"
-    @State private var pendRes = "2"
+    @State private var pendRes = "auto"
+    @State private var pendRenderer = "auto"
 
     private var needsReload: Bool {
-        pendEngine != engine || pendQuality != quality || pendRes != resolution
+        pendEngine != engine || pendQuality != quality || pendRes != resolution || pendRenderer != renderer
     }
 
     private func heading(_ t: String) -> some View {
@@ -116,13 +119,18 @@ struct GameOptionsPanel: View {
                 Toggle("Auto-rotate to match game", isOn: $autoLandscape).tint(.orange)
                 heading("FRAME RATE")
                 ChipPicker(options: GameOptions.fpsCaps, selection: $fpsCap)
-                note("Limits how often the screen is redrawn. Lower it to save battery and heat.")
+                note("Auto matches the game's own frame rate. This avoids wasted work and keeps the phone cooler.")
                 Toggle("Show FPS counter", isOn: $showFps).tint(.orange)
+            }
+            Group {
                 heading("QUALITY")
                 ChipPicker(options: GameOptions.qualities, selection: $pendQuality)
                 heading("RENDER RESOLUTION")
                 ChipPicker(options: GameOptions.resolutions, selection: $pendRes)
-                note("Lower quality and resolution = smoother games. Engine, quality and resolution need Save and Reload.")
+                note("Auto = sharp enough for the game's own size, without drawing extra pixels.")
+                heading("RENDERER")
+                ChipPicker(options: GameOptions.renderers, selection: $pendRenderer)
+                note("Experimental. If the screen goes black, set it back to Auto. Changes need Save and Reload.")
             }
         }
     }
@@ -193,11 +201,12 @@ struct GameOptionsPanel: View {
     }
 
     private func resetAll() {
-        let engineChanged = engine != "standard" || quality != "low" || resolution != "2"
+        let engineChanged = engine != "standard" || quality != "low" || resolution != "auto" || renderer != "auto"
         for k in GameOptions.resetKeys { UserDefaults.standard.removeObject(forKey: k) }
         pendEngine = "standard"
         pendQuality = "low"
-        pendRes = "2"
+        pendRes = "auto"
+        pendRenderer = "auto"
         if engineChanged { onReload() }
     }
 
@@ -235,6 +244,7 @@ struct GameOptionsPanel: View {
                         engine = pendEngine
                         quality = pendQuality
                         resolution = pendRes
+                        renderer = pendRenderer
                         onReload()
                         onClose()
                     } label: {
@@ -254,6 +264,7 @@ struct GameOptionsPanel: View {
             pendEngine = engine
             pendQuality = quality
             pendRes = resolution
+            pendRenderer = renderer
         }
     }
 }
@@ -328,49 +339,5 @@ struct AnnotationBar: View {
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(Color.black.opacity(0.7))
         .clipShape(Capsule())
-    }
-}
-
-// MARK: - Virtual keyboard (forwards typing to the game)
-struct KeyboardCapture: View {
-    let holder: WebHolder
-    let onClose: () -> Void
-    private let sentinel = " "
-    @State private var text = " "
-    @FocusState private var focused: Bool
-
-    private func send(_ ch: Character) {
-        let s = String(ch)
-        var code = ""
-        if let u = s.unicodeScalars.first {
-            if (65...90).contains(Int(u.value)) || (97...122).contains(Int(u.value)) { code = "Key" + s.uppercased() }
-            else if (48...57).contains(Int(u.value)) { code = "Digit" + s }
-            else if s == " " { code = "Space" }
-        }
-        holder.tap(code: code, key: s)
-    }
-
-    var body: some View {
-        TextField("", text: $text)
-            .focused($focused)
-            .autocapitalization(.none)
-            .disableAutocorrection(true)
-            .submitLabel(.return)
-            .frame(width: 1, height: 1)
-            .opacity(0.02)
-            .onAppear { focused = true }
-            .onChange(of: text) { new in
-                if new == sentinel { return }
-                if new.count < sentinel.count {
-                    holder.tap(code: "Backspace", key: "Backspace")
-                } else {
-                    for ch in String(new.dropFirst(sentinel.count)) { send(ch) }
-                }
-                text = sentinel
-            }
-            .onSubmit {
-                holder.tap(code: "Enter", key: "Enter")
-                focused = true
-            }
     }
 }

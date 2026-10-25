@@ -289,10 +289,7 @@ struct DualSticks: View {
                 MouseBtn(label: "L-Click", button: 0, holder: holder)
                 MouseBtn(label: "R-Click", button: 2, holder: holder)
             }
-            VirtualStick(size: size, onChange: { v in box.v = v }, onTap: {
-                holder.mouse(down: true, button: 0)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { holder.mouse(down: false, button: 0) }
-            })
+            VirtualStick(size: size, onChange: { v in box.v = v })
         }
     }
 

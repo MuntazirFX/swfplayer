@@ -38,6 +38,12 @@ struct ContentView: View {
         let base = n == 1 ? "1 game" : "\(n) games"
         return favOnly ? base + " · favorites" : base
     }
+    private func importFiles(_ urls: [URL]) {
+        let msg = lib.add(urls)
+        let errors = msg.split(separator: "\n").filter { $0.hasPrefix("Error") }
+        info = errors.isEmpty ? nil : errors.joined(separator: "\n")
+    }
+
     private func play(_ url: URL) {
         GameStore.data = try? Data(contentsOf: url)
         lib.recordPlay(url)
@@ -177,7 +183,7 @@ struct ContentView: View {
             case .picker:
                 DocPicker(onPick: { urls in
                     sheet = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { info = lib.add(urls) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { importFiles(urls) }
                 }, onCancel: { sheet = nil })
             case .settings:
                 SettingsView(lib: lib)
@@ -185,7 +191,7 @@ struct ContentView: View {
                 RenameSheet(initial: lib.title(url)) { new in lib.rename(url, to: new) }
             }
         }
-        .alert("Import", isPresented: Binding(get: { info != nil }, set: { if !$0 { info = nil } })) {
+        .alert("Import failed", isPresented: Binding(get: { info != nil }, set: { if !$0 { info = nil } })) {
             Button("OK") {}
         } message: { Text(info ?? "") }
         .confirmationDialog("Delete this game?",
@@ -205,7 +211,7 @@ struct ContentView: View {
                          onThumb: { img in lib.saveThumb(img, for: url) },
                          onClose: { playing = nil })
         }
-        .onOpenURL { url in info = lib.add([url]) }
+        .onOpenURL { url in importFiles([url]) }
         .onChange(of: scenePhase) { phase in
             if phase == .active { lib.refresh() }
         }

@@ -59,13 +59,15 @@ struct GameConfig {
     var showFps: Bool
     var showCursor: Bool
     var trackpad: Bool
-    var dpr: Double
+    var dpr: String
+    var renderer: String
 }
 
 // MARK: - Web view holder + JS helpers
 final class WebHolder {
     weak var web: WKWebView?
     var onReady: (() -> Void)?
+    var onStuck: (() -> Void)?
 
     func js(_ code: String) { web?.evaluateJavaScript(code, completionHandler: nil) }
 
@@ -95,7 +97,8 @@ final class WebHolder {
             URLQueryItem(name: "showfps", value: c.showFps ? "1" : "0"),
             URLQueryItem(name: "cursor", value: c.showCursor ? "1" : "0"),
             URLQueryItem(name: "trackpad", value: c.trackpad ? "1" : "0"),
-            URLQueryItem(name: "dpr", value: String(c.dpr))
+            URLQueryItem(name: "dpr", value: c.dpr),
+            URLQueryItem(name: "renderer", value: c.renderer)
         ]
         guard let u = comps.url else { return }
         web?.load(URLRequest(url: u))
@@ -133,6 +136,7 @@ struct GameView: UIViewRepresentable {
         let bridge = ScriptBridge()
         bridge.onMessage = { [weak h] msg in
             if msg == "ready" { DispatchQueue.main.async { h?.onReady?() } }
+            if msg == "stuck" { DispatchQueue.main.async { h?.onStuck?() } }
         }
         cfg.userContentController.add(bridge, name: "pf")
 
@@ -152,6 +156,13 @@ struct GameView: UIViewRepresentable {
         return wv
     }
     func updateUIView(_ wv: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: ()) {
+        uiView.stopLoading()
+        uiView.configuration.userContentController.removeAllScriptMessageHandlers()
+        uiView.configuration.userContentController.removeAllUserScripts()
+        uiView.loadHTMLString("", baseURL: nil)
+    }
 }
 
 // MARK: - Side bar item
@@ -179,7 +190,8 @@ struct PlayerScreen: View {
     @AppStorage("wasd") private var wasd = false
     @AppStorage("scaleMode") private var scaleMode = "auto"
     @AppStorage("quality") private var quality = "low"
-    @AppStorage("resolution") private var resolution = "2"
+    @AppStorage("resolution") private var resolution = "auto"
+    @AppStorage("renderer") private var renderer = "auto"
     @AppStorage("engine") private var engine = "standard"
     @AppStorage("fpsCap") private var fpsCap = "0"
     @AppStorage("showFps") private var showFps = false
@@ -203,7 +215,8 @@ struct PlayerScreen: View {
     @State private var pencil = false
     @State private var strokes: [Stroke] = []
     @State private var penIndex = 0
-    @State private var keyboardOn = false
+    @State private var stuckCount = 0
+    @State private var stuckBanner = false
     @State private var confirmExit = false
     @State private var thumbDone = false
     @State private var slots: [SlotButtonModel] = []
@@ -230,7 +243,7 @@ struct PlayerScreen: View {
         GameConfig(gid: gameKey, scale: scaleMode, quality: quality, size: gameSize,
                    engine: engine, fps: Int(fpsCap) ?? 0, showFps: showFps,
                    showCursor: cursorVisible, trackpad: cursorMode,
-                   dpr: engine == "perf" ? 1.0 : (Double(resolution) ?? 0))
+                   dpr: engine == "perf" ? "1" : resolution, renderer: renderer)
     }
 
     private func syncJS() {
@@ -285,6 +298,8 @@ struct PlayerScreen: View {
     }
 
     private func finish() {
+        holder.onReady = nil
+        holder.onStuck = nil
         GamepadManager.shared.detach()
         if landscape { Orient.set(.portrait) }
         onClose()
@@ -308,8 +323,6 @@ struct PlayerScreen: View {
         a.append(SideItem(id: "mapping", icon: "gamecontroller", on: false,
                           action: { showMapping = true }))
         a.append(SideItem(id: "pencil", icon: "pencil", on: pencil, action: { togglePencil() }))
-        a.append(SideItem(id: "keyboard", icon: "keyboard", on: keyboardOn,
-                          action: { keyboardOn.toggle() }))
         a.append(SideItem(id: "controls", icon: "circle.grid.cross.fill", on: controlsOn,
                           action: { controlsOn.toggle() }))
         a.append(SideItem(id: "mute", icon: muted ? "speaker.slash.fill" : "speaker.wave.2.fill", on: muted,
@@ -418,8 +431,35 @@ struct PlayerScreen: View {
                 }
             }
 
-            if keyboardOn {
-                KeyboardCapture(holder: holder, onClose: { keyboardOn = false })
+            if cursorMode && !editing && !(controlsOn && controlStyle == "dual") {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 14) {
+                        MouseBtn(label: "L-Click", button: 0, holder: holder)
+                        MouseBtn(label: "R-Click", button: 2, holder: holder)
+                    }
+                    .padding(.bottom, 16)
+                }
+            }
+
+            if stuckBanner {
+                VStack {
+                    Spacer()
+                    VStack(spacing: 10) {
+                        Text("The game isn't responding. Try a lower render resolution, or switch the engine to Performance in Options.")
+                            .font(.footnote).foregroundColor(.white).multilineTextAlignment(.center)
+                        HStack(spacing: 16) {
+                            Button("Reload") { stuckBanner = false; reload() }
+                                .font(.subheadline.weight(.bold)).foregroundColor(.orange)
+                            Button("Dismiss") { stuckBanner = false }
+                                .font(.subheadline).foregroundColor(.white.opacity(0.8))
+                        }
+                    }
+                    .padding(14)
+                    .background(Color.black.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 24).padding(.bottom, 24)
+                }
             }
 
             if !editing { sideBar }
@@ -442,6 +482,14 @@ struct PlayerScreen: View {
             .onAppear {
                 GamepadManager.shared.attach(holder: holder, gameKey: gameKey)
                 slots = SlotStore.load(gameKey, padLayout)
+                holder.onStuck = {
+                    if stuckCount == 0 {
+                        stuckCount = 1
+                        reload()
+                    } else {
+                        stuckBanner = true
+                    }
+                }
                 holder.onReady = {
                     loading = false
                     syncJS()

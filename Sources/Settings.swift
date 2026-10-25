@@ -5,7 +5,8 @@ struct SettingsView: View {
     @ObservedObject var lib: Library
     @AppStorage("scaleMode") private var scaleMode = "auto"
     @AppStorage("quality") private var quality = "low"
-    @AppStorage("resolution") private var resolution = "2"
+    @AppStorage("resolution") private var resolution = "auto"
+    @AppStorage("renderer") private var renderer = "auto"
     @AppStorage("autoLandscape") private var autoLandscape = true
     @AppStorage("controlsOn") private var controlsOn = true
     @AppStorage("wasd") private var wasd = false
@@ -38,6 +39,7 @@ struct SettingsView: View {
                         Text("Best").tag("best")
                     }
                     Picker("Render resolution", selection: $resolution) {
+                        Text("Auto (recommended)").tag("auto")
                         Text("Native (sharpest)").tag("0")
                         Text("2x").tag("2")
                         Text("1.5x").tag("1.5")
@@ -53,11 +55,16 @@ struct SettingsView: View {
                         Text("Original (online)").tag("cdn")
                     }
                     Picker("Frame rate", selection: $fpsCap) {
-                        Text("Default").tag("0")
+                        Text("Auto (match game)").tag("0")
+                        Text("20 FPS").tag("20")
                         Text("30 FPS").tag("30")
-                        Text("40 FPS").tag("40")
-                        Text("50 FPS").tag("50")
                         Text("60 FPS").tag("60")
+                    }
+                    Picker("Renderer (experimental)", selection: $renderer) {
+                        Text("Auto").tag("auto")
+                        Text("WebGPU").tag("webgpu")
+                        Text("WebGL").tag("webgl")
+                        Text("Canvas").tag("canvas")
                     }
                     Toggle("Show FPS counter", isOn: $showFps)
                 }
