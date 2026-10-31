@@ -171,6 +171,8 @@ struct SideItem: Identifiable {
     let icon: String
     let on: Bool
     let action: () -> Void
+    var tint: String = "orange"
+    var slashed: Bool = false
 }
 
 // MARK: - Player screen
@@ -183,7 +185,7 @@ struct PlayerScreen: View {
     let onClose: () -> Void
 
     @AppStorage("controlsOn") private var controlsOn = true
-    @AppStorage("controlStyle") private var controlStyle = "buttons"
+    @AppStorage("padOn") private var padOn = false
     @AppStorage("padLayout") private var padLayout = "simple"
     @AppStorage("mirror") private var mirror = false
     @AppStorage("dir8") private var dir8 = true
@@ -199,7 +201,7 @@ struct PlayerScreen: View {
     @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
     @AppStorage("moveType") private var moveType = "dpad"
     @AppStorage("autoLandscape") private var autoLandscape = true
-    @AppStorage("cursorMode") private var cursorMode = false
+    @AppStorage("touchDirect") private var touchDirect = true
     @AppStorage("cursorSpeed") private var cursorSpeed = 9.0
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var pads = GamepadManager.shared
@@ -211,7 +213,6 @@ struct PlayerScreen: View {
     @State private var landscape = false
     @State private var showOptions = false
     @State private var showMapping = false
-    @State private var barOpen = true
     @State private var pencil = false
     @State private var strokes: [Stroke] = []
     @State private var penIndex = 0
@@ -228,9 +229,12 @@ struct PlayerScreen: View {
     // MARK: helpers
     private var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
 
+    /// Touch OFF = virtual mouse: direct taps on the game screen are blocked.
+    private var cursorMode: Bool { !touchDirect }
+
     private var cursorVisible: Bool {
         if cursorMode { return true }
-        if controlsOn && controlStyle == "dual" { return true }
+        if padOn && pads.config.rightStickMouse { return true }
         if !pads.names.isEmpty && (pads.config.leftStickMouse || pads.config.rightStickMouse) { return true }
         return false
     }
@@ -254,13 +258,30 @@ struct PlayerScreen: View {
         if muted { holder.setMuted(true) }
     }
 
-    private func roundIcon(_ system: String, on: Bool = false) -> some View {
-        Image(systemName: system)
-            .foregroundColor(on ? .black : .white)
-            .frame(width: 20, height: 20)
-            .padding(10)
-            .background(on ? Color.orange : Color.black.opacity(0.55))
-            .clipShape(Circle())
+    private func sideIcon(_ it: SideItem) -> some View {
+        let fill: Color
+        let fg: Color
+        if it.on && it.tint == "green" {
+            fill = Color(red: 0.05, green: 0.30, blue: 0.06)
+            fg = Color(red: 0.55, green: 0.90, blue: 0.50)
+        } else if it.on && it.tint == "yellow" {
+            fill = Color(red: 0.36, green: 0.31, blue: 0.0)
+            fg = Color(red: 0.95, green: 0.85, blue: 0.10)
+        } else if it.on {
+            fill = Color.orange
+            fg = Color.black
+        } else {
+            fill = Color(white: 0.36, opacity: 0.88)
+            fg = Color.black.opacity(0.85)
+        }
+        return ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(fill)
+            Image(systemName: it.icon).font(.system(size: 15, weight: .semibold)).foregroundColor(fg)
+            if it.slashed {
+                Rectangle().fill(fg).frame(width: 2, height: 24).rotationEffect(.degrees(45))
+            }
+        }
+        .frame(width: 32, height: 32)
     }
 
     private func snapshot() {
@@ -312,62 +333,56 @@ struct PlayerScreen: View {
 
     private var sideItems: [SideItem] {
         var a: [SideItem] = []
-        a.append(SideItem(id: "exit", icon: "xmark", on: false, action: { requestExit() }))
+        a.append(SideItem(id: "exit", icon: "arrow.left", on: false, action: { requestExit() }))
         a.append(SideItem(id: "reload", icon: "arrow.clockwise", on: false, action: { reload() }))
-        a.append(SideItem(id: "pause", icon: paused ? "play.fill" : "pause.fill", on: paused,
+        a.append(SideItem(id: "pause", icon: paused ? "play.fill" : "pause.fill", on: false,
                           action: { paused.toggle(); holder.setPaused(paused) }))
-        a.append(SideItem(id: "options", icon: "gearshape.fill", on: showOptions,
+        a.append(SideItem(id: "options", icon: "gearshape.fill", on: false,
                           action: { showOptions.toggle() }))
-        a.append(SideItem(id: "touch", icon: "hand.tap.fill", on: cursorMode,
-                          action: { cursorMode.toggle() }))
-        a.append(SideItem(id: "mapping", icon: "gamecontroller", on: false,
+        a.append(SideItem(id: "touch", icon: "hand.tap.fill", on: touchDirect,
+                          action: { touchDirect.toggle() }, tint: "green"))
+        a.append(SideItem(id: "mapping", icon: "gamecontroller.fill", on: false,
                           action: { showMapping = true }))
         a.append(SideItem(id: "pencil", icon: "pencil", on: pencil, action: { togglePencil() }))
-        a.append(SideItem(id: "controls", icon: "circle.grid.cross.fill", on: controlsOn,
-                          action: { controlsOn.toggle() }))
-        a.append(SideItem(id: "mute", icon: muted ? "speaker.slash.fill" : "speaker.wave.2.fill", on: muted,
-                          action: { muted.toggle(); holder.setMuted(muted) }))
-        if isPhone {
-            a.append(SideItem(id: "rotate", icon: "rotate.right", on: false,
-                              action: { setOrientation(!landscape) }))
-        }
+        a.append(SideItem(id: "keyboard", icon: "keyboard", on: false,
+                          action: { controlsOn.toggle() }, slashed: !controlsOn))
+        a.append(SideItem(id: "pad", icon: "circle.grid.cross.fill", on: padOn,
+                          action: { padOn.toggle() }, tint: "yellow"))
         return a
     }
 
     // MARK: overlays
     @ViewBuilder private var controlsOverlay: some View {
-        if controlStyle == "dual" {
-            DualSticks(holder: holder, size: ctrlSize * 2.1, mirror: mirror, wasd: wasd, dir8: dir8)
-                .opacity(ctrlOpacity)
-        } else {
-            ZStack {
-                MovePad(holder: holder, moveType: moveType, wasd: wasd, dir8: dir8,
-                        size: ctrlSize, mirror: mirror)
-                SlotPads(slots: slots, size: ctrlSize, mirror: mirror, holder: holder)
-            }
-            .opacity(ctrlOpacity)
+        ZStack {
+            MovePad(holder: holder, moveType: moveType, wasd: wasd, dir8: dir8,
+                    size: ctrlSize, mirror: mirror)
+            SlotPads(slots: slots, size: ctrlSize, mirror: mirror, holder: holder)
+        }
+        .opacity(ctrlOpacity)
+    }
+
+    /// On-screen gamepad (same mapping as a real controller) and the virtual mouse.
+    @ViewBuilder private var padLayers: some View {
+        if padOn && !editing {
+            PadOverlay(holder: holder, scale: ctrlSize / 58.0).opacity(ctrlOpacity)
+        }
+        if cursorMode && !padOn && !editing {
+            CursorOverlay(holder: holder)
         }
     }
 
     private var sideBar: some View {
-        VStack {
-            HStack(alignment: .top, spacing: 8) {
-                Button { barOpen.toggle() } label: {
-                    roundIcon(barOpen ? "chevron.left" : "line.3.horizontal")
-                }
-                if barOpen {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(sideItems) { it in
-                                Button(action: it.action) { roundIcon(it.icon, on: it.on) }
-                            }
-                        }
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
+                VStack(spacing: 5) {
+                    ForEach(sideItems) { it in
+                        Button(action: it.action) { sideIcon(it) }
                     }
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12).padding(.top, 8)
-            Spacer()
+            .padding(.leading, 12).padding(.top, 10)
+            Spacer(minLength: 0)
         }
     }
 
@@ -384,7 +399,6 @@ struct PlayerScreen: View {
                                  onMapping: { showOptions = false; showMapping = true },
                                  onEditLayout: {
                                      showOptions = false
-                                     controlStyle = "buttons"
                                      controlsOn = true
                                      editing = true
                                  })
@@ -431,16 +445,7 @@ struct PlayerScreen: View {
                 }
             }
 
-            if cursorMode && !editing && !(controlsOn && controlStyle == "dual") {
-                VStack {
-                    Spacer()
-                    HStack(spacing: 14) {
-                        MouseBtn(label: "L-Click", button: 0, holder: holder)
-                        MouseBtn(label: "R-Click", button: 2, holder: holder)
-                    }
-                    .padding(.bottom, 16)
-                }
-            }
+            padLayers
 
             if stuckBanner {
                 VStack {

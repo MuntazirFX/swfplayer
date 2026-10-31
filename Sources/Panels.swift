@@ -9,14 +9,13 @@ enum GameOptions {
     static let renderers: [(String, String)] = [("auto", "Auto"), ("webgpu", "WebGPU"), ("webgl", "WebGL"), ("canvas", "Canvas")]
     static let fpsCaps: [(String, String)] = [("0", "Auto"), ("20", "20"), ("30", "30"), ("60", "60")]
     static let layouts: [(String, String)] = [("simple", "Simple"), ("focus", "Focus"), ("double", "Double"), ("quadra", "Quadra")]
-    static let styles: [(String, String)] = [("buttons", "Buttons"), ("dual", "Dual sticks")]
-    static let touchModes: [(String, String)] = [("direct", "Direct touch"), ("cursor", "Cursor")]
+    static let touchModes: [(String, String)] = [("direct", "Direct touch"), ("cursor", "Virtual mouse")]
     static let moves: [(String, String)] = [("dpad", "D-Pad"), ("joystick", "Joystick")]
     static let dirs: [(String, String)] = [("8", "8-Directions"), ("4", "4-Directions")]
 
-    static let resetKeys = ["scaleMode", "quality", "resolution", "renderer", "engine", "fpsCap", "showFps", "controlsOn", "controlStyle",
+    static let resetKeys = ["scaleMode", "quality", "resolution", "renderer", "engine", "fpsCap", "showFps", "controlsOn", "padOn",
                             "padLayout", "mirror", "dir8", "wasd", "moveType", "haptics", "ctrlSize",
-                            "ctrlOpacity", "autoLandscape", "cursorMode", "cursorSpeed"]
+                            "ctrlOpacity", "autoLandscape", "touchDirect", "cursorSpeed"]
 }
 
 struct ChipPicker: View {
@@ -58,7 +57,6 @@ struct GameOptionsPanel: View {
     @AppStorage("showFps") private var showFps = false
     @AppStorage("autoLandscape") private var autoLandscape = true
     @AppStorage("controlsOn") private var controlsOn = true
-    @AppStorage("controlStyle") private var controlStyle = "buttons"
     @AppStorage("padLayout") private var padLayout = "simple"
     @AppStorage("mirror") private var mirror = false
     @AppStorage("dir8") private var dir8 = true
@@ -67,7 +65,7 @@ struct GameOptionsPanel: View {
     @AppStorage("haptics") private var haptics = true
     @AppStorage("ctrlSize") private var ctrlSize = 58.0
     @AppStorage("ctrlOpacity") private var ctrlOpacity = 1.0
-    @AppStorage("cursorMode") private var cursorMode = false
+    @AppStorage("touchDirect") private var touchDirect = true
     @AppStorage("cursorSpeed") private var cursorSpeed = 9.0
 
     @State private var tab = 0
@@ -91,7 +89,7 @@ struct GameOptionsPanel: View {
         Binding(get: { dir8 ? "8" : "4" }, set: { dir8 = ($0 == "8") })
     }
     private var touchBinding: Binding<String> {
-        Binding(get: { cursorMode ? "cursor" : "direct" }, set: { cursorMode = ($0 == "cursor") })
+        Binding(get: { touchDirect ? "direct" : "cursor" }, set: { touchDirect = ($0 == "direct") })
     }
 
     private var engineNote: String {
@@ -150,21 +148,18 @@ struct GameOptionsPanel: View {
     private var controlsTab: some View {
         VStack(alignment: .leading, spacing: 10) {
             Group {
-                heading("ON-SCREEN CONTROLS")
-                Toggle("Show controls", isOn: $controlsOn).tint(.orange)
-                ChipPicker(options: GameOptions.styles, selection: $controlStyle)
-                if controlStyle == "buttons" {
-                    note("Button layout (each layout is saved per game)")
-                    ChipPicker(options: GameOptions.layouts, selection: $padLayout)
-                    Button(action: onEditLayout) {
-                        Label("Edit buttons: move, resize, set keys", systemImage: "square.and.pencil")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.14))
-                            .foregroundColor(.white)
-                            .clipShape(Capsule())
-                    }
+                heading("KEYBOARD LAYOUT")
+                Toggle("Show keyboard controls", isOn: $controlsOn).tint(.orange)
+                note("Button layout (each layout is saved per game)")
+                ChipPicker(options: GameOptions.layouts, selection: $padLayout)
+                Button(action: onEditLayout) {
+                    Label("Edit buttons: move, resize, set keys", systemImage: "square.and.pencil")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.14))
+                        .foregroundColor(.white)
+                        .clipShape(Capsule())
                 }
                 Toggle("Left to right (swap sides)", isOn: $mirror).tint(.orange)
                 note("Direction control")
@@ -175,7 +170,7 @@ struct GameOptionsPanel: View {
             Group {
                 heading("TOUCH MODE")
                 ChipPicker(options: GameOptions.touchModes, selection: touchBinding)
-                note("Cursor mode: drag to move the pointer, tap to click, two-finger tap to right-click, hold to drag.")
+                note("Virtual mouse: use the on-screen cursor stick and mouse button. Taps on the game screen are ignored.")
                 Text("Cursor speed: \(Int(cursorSpeed))").font(.subheadline)
                 Slider(value: $cursorSpeed, in: 1...18, step: 1).tint(.orange)
             }

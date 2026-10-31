@@ -186,6 +186,18 @@ final class GamepadManager: ObservableObject {
         for n in up where !detecting { fire(n, false) }
     }
 
+    /// On-screen controller buttons go through exactly the same mapping as a physical gamepad.
+    func press(_ name: String, _ isDown: Bool) { fire(name, isDown) }
+
+    func isClick(_ name: String) -> Bool {
+        (config.leftStickMouse || config.rightStickMouse) && (name == config.clickLeft || name == config.clickRight)
+    }
+
+    func label(_ name: String) -> String {
+        if isClick(name) { return "" }
+        return KeyAction.short(config.map[name] ?? "none")
+    }
+
     private func fire(_ name: String, _ isDown: Bool) {
         guard let h = holder else { return }
         if config.leftStickMouse || config.rightStickMouse {

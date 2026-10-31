@@ -60,94 +60,16 @@ struct DPad: View {
     }
 }
 
-struct ActionPad: View {
-    let holder: WebHolder
-    let size: CGFloat
-    let extra: Bool
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                KeyButton(label: "Z", code: "KeyZ", key: "z", size: size, holder: holder)
-                KeyButton(label: "X", code: "KeyX", key: "x", size: size, holder: holder)
-            }
-            HStack(spacing: 8) {
-                KeyButton(label: "SPC", code: "Space", key: " ", size: size, holder: holder)
-                KeyButton(label: "ENT", code: "Enter", key: "Enter", size: size, holder: holder)
-            }
-            if extra {
-                HStack(spacing: 8) {
-                    KeyButton(label: "C", code: "KeyC", key: "c", size: size, holder: holder)
-                    KeyButton(label: "SHF", code: "ShiftLeft", key: "Shift", size: size, holder: holder)
-                }
-                HStack(spacing: 8) {
-                    KeyButton(label: "ESC", code: "Escape", key: "Escape", size: size, holder: holder)
-                    KeyButton(label: "R", code: "KeyR", key: "r", size: size, holder: holder)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Button layouts: Simple / Focus / Double / Quadra
-struct KeyPads: View {
-    let holder: WebHolder
-    let layout: String
-    let wasd: Bool
-    let size: CGFloat
-    let extra: Bool
-    let mirror: Bool
-
-    @ViewBuilder private var leftCluster: some View {
-        DPad(holder: holder, wasd: layout == "double" ? false : wasd, size: size * 0.93)
-    }
-
-    @ViewBuilder private var rightCluster: some View {
-        switch layout {
-        case "focus":
-            HStack(alignment: .bottom, spacing: 12) {
-                KeyButton(label: "Z", code: "KeyZ", key: "z", size: size * 1.15, holder: holder)
-                KeyButton(label: "SPC", code: "Space", key: " ", size: size * 1.5, holder: holder)
-            }
-        case "double":
-            VStack(spacing: 8) {
-                DPad(holder: holder, wasd: true, size: size * 0.93)
-                KeyButton(label: "SPC", code: "Space", key: " ", size: size, holder: holder)
-            }
-        case "quadra":
-            VStack(spacing: 4) {
-                KeyButton(label: "C", code: "KeyC", key: "c", size: size, holder: holder)
-                HStack(spacing: 4) {
-                    KeyButton(label: "Z", code: "KeyZ", key: "z", size: size, holder: holder)
-                    Color.clear.frame(width: size, height: size)
-                    KeyButton(label: "X", code: "KeyX", key: "x", size: size, holder: holder)
-                }
-                KeyButton(label: "V", code: "KeyV", key: "v", size: size, holder: holder)
-            }
-        default:
-            ActionPad(holder: holder, size: size, extra: extra)
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom) {
-            if mirror {
-                rightCluster
-                Spacer()
-                leftCluster
-            } else {
-                leftCluster
-                Spacer()
-                rightCluster
-            }
-        }
-    }
-}
-
 // MARK: - Virtual joystick
 struct VirtualStick: View {
     let size: CGFloat
     let onChange: (CGVector) -> Void
     var onTap: (() -> Void)? = nil
+    var ringFill: Color = Color.white.opacity(0.12)
+    var ringStroke: Color = Color.white.opacity(0.4)
+    var knobFill: Color = Color.white.opacity(0.38)
+    var knobIcon: String? = nil
+    var bottomIcon: String? = nil
     @State private var knob: CGSize = .zero
     @State private var start: Date?
     @State private var moved = false
@@ -155,10 +77,20 @@ struct VirtualStick: View {
     var body: some View {
         let r = size / 2
         ZStack {
-            Circle().fill(Color.white.opacity(0.12))
-            Circle().stroke(Color.white.opacity(0.4), lineWidth: 1.5)
-            Circle().fill(Color.white.opacity(0.38))
+            Circle().fill(ringFill)
+            Circle().stroke(ringStroke, lineWidth: 2)
+            if let b = bottomIcon {
+                Image(systemName: b).font(.system(size: size * 0.13))
+                    .foregroundColor(ringStroke).offset(y: size * 0.33)
+            }
+            Circle().fill(knobFill)
                 .frame(width: size * 0.42, height: size * 0.42)
+                .overlay(Circle().stroke(Color.white.opacity(0.7), lineWidth: 2))
+                .overlay(Group {
+                    if let k = knobIcon {
+                        Image(systemName: k).font(.system(size: size * 0.2)).foregroundColor(.white.opacity(0.85))
+                    }
+                })
                 .offset(knob)
         }
         .frame(width: size, height: size)
@@ -238,83 +170,3 @@ final class DirKeys {
 }
 
 final class StickBox { var v = CGVector(dx: 0, dy: 0) }
-
-struct MouseBtn: View {
-    let label: String
-    let button: Int
-    let holder: WebHolder
-    @State private var down = false
-    var body: some View {
-        Text(label)
-            .font(.system(size: 13, weight: .bold))
-            .foregroundColor(.white)
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            .background(Capsule().fill(down ? Color.orange : Color.blue.opacity(0.45)))
-            .overlay(Capsule().stroke(Color.white.opacity(0.5), lineWidth: 1.5))
-            .contentShape(Capsule())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if !down { down = true; holder.mouse(down: true, button: button) }
-                    }
-                    .onEnded { _ in
-                        down = false
-                        holder.mouse(down: false, button: button)
-                    }
-            )
-    }
-}
-
-// MARK: - PS4-style dual stick overlay: left = move keys, right = cursor
-struct DualSticks: View {
-    let holder: WebHolder
-    let size: CGFloat
-    let mirror: Bool
-    let wasd: Bool
-    let dir8: Bool
-    @AppStorage("cursorSpeed") private var speed = 9.0
-    @State private var keys = DirKeys()
-    @State private var box = StickBox()
-    private let tick = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
-
-    @ViewBuilder private var moveCluster: some View {
-        VirtualStick(size: size, onChange: { v in
-            keys.update(v, holder: holder, wasd: wasd, dir8: dir8)
-        })
-    }
-
-    @ViewBuilder private var cursorCluster: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                MouseBtn(label: "L-Click", button: 0, holder: holder)
-                MouseBtn(label: "R-Click", button: 2, holder: holder)
-            }
-            VirtualStick(size: size, onChange: { v in box.v = v })
-        }
-    }
-
-    var body: some View {
-        VStack {
-            Spacer()
-            HStack(alignment: .bottom) {
-                if mirror {
-                    cursorCluster
-                    Spacer()
-                    moveCluster
-                } else {
-                    moveCluster
-                    Spacer()
-                    cursorCluster
-                }
-            }
-            .padding(.horizontal, 24).padding(.bottom, 24)
-        }
-        .onReceive(tick) { _ in
-            let v = box.v
-            if abs(v.dx) > 0.12 || abs(v.dy) > 0.12 {
-                let px = speed * 55.0 / 60.0
-                holder.moveCursor(dx: Double(v.dx) * px, dy: Double(v.dy) * px)
-            }
-        }
-    }
-}
