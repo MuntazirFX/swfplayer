@@ -149,44 +149,12 @@ ruffle-player{position:fixed;display:block}
   function mup(b)   { btnMask &= ~maskOf(b); ptr("pointerup", b, btnMask); }
   function click(b) { mdown(b); setTimeout(() => mup(b), 40); }
 
-  /* Cursor ("trackpad") mode: drag = move the pointer, quick tap = click at the pointer.
-     Nothing else: no hold-to-drag. Use the on-screen mouse buttons to hold a click while moving. */
-  let ts = null;
-  function onTS(e) {
-    if (!trackpad || !e.isTrusted) return;
-    e.preventDefault();
-    if (ts) return;
-    const t = e.changedTouches[0];
-    ts = { id: t.identifier, sx: t.clientX, sy: t.clientY, x: t.clientX, y: t.clientY, t0: Date.now(), moved: false };
-  }
-  function onTM(e) {
-    if (!trackpad || !e.isTrusted) return;
-    e.preventDefault();
-    if (!ts) return;
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const t = e.changedTouches[i];
-      if (t.identifier !== ts.id) continue;
-      if (!ts.moved && Math.hypot(t.clientX - ts.sx, t.clientY - ts.sy) > 8) ts.moved = true;
-      if (ts.moved) moveBy((t.clientX - ts.x) * gain, (t.clientY - ts.y) * gain);
-      ts.x = t.clientX; ts.y = t.clientY;
-    }
-  }
-  function onTE(e) {
-    if (!trackpad || !e.isTrusted) return;
-    e.preventDefault();
-    if (!ts) return;
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      if (e.changedTouches[i].identifier !== ts.id) continue;
-      if (!ts.moved && Date.now() - ts.t0 < 250) click(0);
-      ts = null;
-    }
-  }
+  /* Virtual-mouse mode: direct touches on the game screen are ignored completely.
+     The pointer is moved by the on-screen stick and clicked with the on-screen mouse button. */
   const opt = { capture: true, passive: false };
-  window.addEventListener("touchstart", onTS, opt);
-  window.addEventListener("touchmove", onTM, opt);
-  window.addEventListener("touchend", onTE, opt);
-  window.addEventListener("touchcancel", onTE, opt);
-  ["pointerdown", "pointermove", "pointerup", "pointercancel", "mousedown", "mousemove", "mouseup", "click", "contextmenu"]
+  ["touchstart", "touchmove", "touchend", "touchcancel",
+   "pointerdown", "pointermove", "pointerup", "pointercancel",
+   "mousedown", "mousemove", "mouseup", "click", "contextmenu"]
     .forEach((n) => window.addEventListener(n, (e) => {
       if (trackpad && e.isTrusted) { e.stopImmediatePropagation(); e.preventDefault(); }
     }, opt));
